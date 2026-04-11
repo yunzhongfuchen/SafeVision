@@ -177,8 +177,30 @@ def cleanup_trackers(tracker, alive_ids):
             del tracker[pid]
 
 
+def match_persons(current_boxes, prev_boxes, iou_threshold=0.3):
+    """基于 IoU 匹配当前帧的人体框到上一帧的 ID。返回 current_idx -> pid 的映射"""
+    mapping = {}
+    used_pids = set()
+    for i, cbox in enumerate(current_boxes):
+        best_pid = None
+        best_iou = 0
+        for pid, pbox in prev_boxes.items():
+            if pid in used_pids:
+                continue
+            iou = calc_iou(cbox, pbox)
+            if iou > best_iou:
+                best_iou = iou
+                best_pid = pid
+        if best_pid is not None and best_iou > iou_threshold:
+            used_pids.add(best_pid)
+            mapping[i] = best_pid
+    return mapping
+
+
 def detect_sleep():
     global person_counter, sleep_tracker
+
+    prev_boxes = {}  # pid -> box  用于跨帧 ID 匹配
 
     while running:
         if latest_frame is None or "boxes" not in result_human:
@@ -187,19 +209,26 @@ def detect_sleep():
 
         with lock:
             frame = latest_frame.copy()
+            human_boxes = list(result_human["boxes"])
+            human_scores = list(result_human["scores"])
 
-        human_boxes = result_human["boxes"]
-        human_scores = result_human["scores"]
-
-        # 为每个检测到人分配唯一 ID
+        # 跨帧 ID 匹配
+        matched = match_persons(human_boxes, prev_boxes)
         alive_ids = set()
         person_boxes = []
 
-        for box, score in zip(human_boxes, human_scores):
-            pid = person_counter
-            person_counter += 1
+        for i, (box, score) in enumerate(zip(human_boxes, human_scores)):
+            if i in matched:
+                pid = matched[i]
+            else:
+                pid = person_counter
+                person_counter += 1
             alive_ids.add(pid)
             person_boxes.append((pid, box))
+
+        prev_boxes.clear()
+        for pid, box in person_boxes:
+            prev_boxes[pid] = list(box)
 
         # 清理已消失的人
         cleanup_trackers(sleep_tracker, alive_ids)
@@ -219,7 +248,7 @@ def detect_sleep():
             is_sleeping = False
             if r and r[0].keypoints is not None:
                 kpts = r[0].keypoints.xy[0]  # 17 个关键点
-                if len(kpts) >= 7 and all(k > 0 for k in kpts[0]):
+                if len(kpts) >= 13 and all(k > 0 for k in kpts[0]):
                     nose_y = kpts[0][1]
                     l_shoulder_y = kpts[5][1]
                     r_shoulder_y = kpts[6][1]
@@ -256,6 +285,8 @@ def detect_sleep():
 
             if tracker["sleeping"] and tracker["sleep_count"] == 0:
                 tracker["sleeping"] = False
+
+        time.sleep(0.01)
 
 
 # ======================
