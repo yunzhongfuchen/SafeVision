@@ -710,6 +710,8 @@ def start_detection(source_type, source_path=None):
     annotated_frame = None
     annotated_jpeg = None
     sleep_tracker.clear()
+    last_log_time.clear()
+    log_entries.clear()
     result_human.clear()
     result_cig.clear()
     result_mask.clear()
