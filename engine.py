@@ -1,7 +1,6 @@
 """AI Video Surveillance Detection Engine"""
 
 import cv2
-import math
 import base64
 import threading
 import time
@@ -9,6 +8,7 @@ from datetime import datetime
 from ultralytics import YOLO
 from modelscope.pipelines import pipeline
 from modelscope.utils.constant import Tasks
+import sleep_detect
 
 
 # ======================
@@ -34,7 +34,7 @@ mask_model = pipeline(
 )
 
 fire_model = YOLO("fire.pt")
-pose_model = YOLO("yolov8s-pose.pt")
+sleep_pose_model = YOLO("yolov8s-pose.pt")
 
 
 # ======================
@@ -62,8 +62,6 @@ result_sleep = {}
 
 # State trackers
 sleep_tracker = {}
-mask_tracker = {}
-person_counter = 0
 
 # Detection threads list (for cleanup on restart)
 _detection_threads: list[threading.Thread] = []
@@ -415,119 +413,93 @@ def detect_fire():
 # Helper Functions
 # ======================
 
-def calc_iou(box1, box2):
-    x1 = max(box1[0], box2[0])
-    y1 = max(box1[1], box2[1])
-    x2 = min(box1[2], box2[2])
-    y2 = min(box1[3], box2[3])
-    inter_area = max(0, x2 - x1) * max(0, y2 - y1)
-    if inter_area == 0:
-        return 0.0
-    box1_area = (box1[2] - box1[0]) * (box1[3] - box1[1])
-    box2_area = (box2[2] - box2[0]) * (box2[3] - box2[1])
-    return inter_area / (box1_area + box2_area - inter_area)
-
-
-def cleanup_trackers(tracker, alive_ids):
-    for pid in list(tracker.keys()):
-        if pid not in alive_ids:
-            del tracker[pid]
-
-
-def match_persons(current_boxes, prev_boxes, iou_threshold=0.3):
-    mapping = {}
-    used_pids = set()
-    for i, cbox in enumerate(current_boxes):
-        best_pid = None
-        best_iou = 0
-        for pid, pbox in prev_boxes.items():
-            if pid in used_pids:
-                continue
-            iou = calc_iou(cbox, pbox)
-            if iou > best_iou:
-                best_iou = iou
-                best_pid = pid
-        if best_pid is not None and best_iou > iou_threshold:
-            used_pids.add(best_pid)
-            mapping[i] = best_pid
-    return mapping
-
-
 def detect_sleep():
-    global person_counter, sleep_tracker, result_sleep
+    """睡岗检测线程 - 基于 YOLOv8-pose 全帧推理。"""
+    global sleep_tracker, result_sleep
     tick, get_fps = _track_thread_fps("detect_sleep")
+    sleep_frames_threshold = get_config_value("sleep_frames") or 150
+    conf_pose_val = get_config_value("conf_pose") or 0.25
+    sleep_tracker = {}
     prev_boxes = {}
+    _pid_counter = 0
+
     while running:
-        if latest_frame is None or "boxes" not in result_human:
+        if latest_frame is None:
             time.sleep(0.05)
             continue
         frame = latest_frame.copy()
-        human_boxes = list(result_human["boxes"])
-        human_scores = list(result_human["scores"])
-        matched = match_persons(human_boxes, prev_boxes)
+
+        # 全帧 pose 推理（YOLOv8-pose 自带人体检测）
+        detections = sleep_detect.process_frame(sleep_pose_model, frame, conf=conf_pose_val)
+
+        # 跨帧 ID 匹配（简单 IoU）
+        current_boxes = [d['box'] for d in detections]
+        mapping = {}
+        used_pids = set()
+        for i, cbox in enumerate(current_boxes):
+            best_pid, best_iou = None, 0
+            for pid, pbox in prev_boxes.items():
+                if pid in used_pids:
+                    continue
+                x1m = max(cbox[0], pbox[0])
+                y1m = max(cbox[1], pbox[1])
+                x2m = min(cbox[2], pbox[2])
+                y2m = min(cbox[3], pbox[3])
+                inter = max(0, x2m - x1m) * max(0, y2m - y1m)
+                if inter == 0:
+                    continue
+                area1 = (cbox[2] - cbox[0]) * (cbox[3] - cbox[1])
+                area2 = (pbox[2] - pbox[0]) * (pbox[3] - pbox[1])
+                iou = inter / (area1 + area2 - inter)
+                if iou > best_iou:
+                    best_iou = iou
+                    best_pid = pid
+            if best_pid is not None and best_iou > 0.3:
+                used_pids.add(best_pid)
+                mapping[i] = best_pid
+
         alive_ids = set()
-        person_boxes = []
-        for i, (box, score) in enumerate(zip(human_boxes, human_scores)):
-            if i in matched:
-                pid = matched[i]
-            else:
-                pid = person_counter
-                person_counter += 1
+        for i, det in enumerate(detections):
+            pid = mapping.get(i)
+            if pid is None:
+                pid = _pid_counter
+                _pid_counter += 1
             alive_ids.add(pid)
-            person_boxes.append((pid, box, score))
-        prev_boxes.clear()
-        for pid, box, _ in person_boxes:
-            prev_boxes[pid] = list(box)
-        cleanup_trackers(sleep_tracker, alive_ids)
-        cleanup_trackers(mask_tracker, alive_ids)
-        sleep_frames_threshold = get_config_value("sleep_frames") or 150
-        conf_pose_val = get_config_value("conf_pose") or 0.25
+            prev_boxes[pid] = list(det['box'])
+
+        for pid in list(sleep_tracker.keys()):
+            if pid not in alive_ids:
+                del sleep_tracker[pid]
+        prev_boxes = {pid: box for pid, box in prev_boxes.items() if pid in alive_ids}
+
         frame_results = []
-        for pid, box, score in person_boxes:
-            x1, y1, x2, y2 = map(int, box)
-            crop = frame[max(0, y1):min(frame.shape[0], y2),
-                         max(0, x1):min(frame.shape[1], x2)]
-            if crop.size == 0:
-                frame_results.append({"box": box, "sleeping": False, "score": score})
-                continue
-            try:
-                r = pose_model.predict(crop, conf=conf_pose_val, verbose=False)
-                is_sleeping = False
-                if r and r[0].keypoints is not None and len(r[0].keypoints.xy) > 0:
-                    kpts = r[0].keypoints.xy[0]
-                    if len(kpts) >= 13 and all(k > 0 for k in kpts[0]):
-                        nose_y = kpts[0][1]
-                        l_shoulder_y = kpts[5][1]
-                        r_shoulder_y = kpts[6][1]
-                        shoulder_y = (l_shoulder_y + r_shoulder_y) / 2
-                        if nose_y > shoulder_y:
-                            is_sleeping = True
-                        l_hip_y = kpts[11][1]
-                        r_hip_y = kpts[12][1]
-                        hip_y = (l_hip_y + r_hip_y) / 2
-                        nose_x = kpts[0][0]
-                        hip_x = (kpts[11][0] + kpts[12][0]) / 2
-                        if hip_y != nose_y:
-                            angle = math.degrees(math.atan2(abs(hip_x - nose_x), abs(hip_y - nose_y)))
-                            if angle > 60:
-                                is_sleeping = True
-            except Exception:
-                is_sleeping = False
+        for i, det in enumerate(detections):
+            pid = mapping.get(i)
+            if pid is None:
+                pid = _pid_counter - 1
             if pid not in sleep_tracker:
                 sleep_tracker[pid] = {"sleep_count": 0, "sleeping": False}
             tracker = sleep_tracker[pid]
-            if is_sleeping:
+            if det['sleeping']:
                 tracker["sleep_count"] += 1
             else:
                 tracker["sleep_count"] = max(0, tracker["sleep_count"] - 2)
             if tracker["sleep_count"] >= sleep_frames_threshold:
                 tracker["sleeping"] = True
-            if tracker["sleeping"] and tracker["sleep_count"] == 0:
+            elif tracker["sleep_count"] == 0:
                 tracker["sleeping"] = False
-            frame_results.append({"box": box, "sleeping": tracker["sleeping"], "score": score})
+
+            frame_results.append({
+                "box": det['box'],
+                "sleeping": tracker["sleeping"],
+                "score": det['score'],
+                "posture_label": det['posture_label'],
+                "sleep_confidence": det['sleep_confidence'],
+            })
             if tracker["sleeping"]:
-                snap = _capture_snapshot(frame, "sleep", score, box)
-                add_log_entry("sleep", score, box, snap)
+                snap = _capture_snapshot(frame, "sleep", det['score'], det['box'])
+                add_log_entry("sleep", det['score'], det['box'], snap)
+
         result_sleep = frame_results
         tick()
         time.sleep(0.01)
@@ -600,8 +572,8 @@ def _render_loop():
 
 def start_detection(source_type, source_path=None):
     global cap, running, video_finished, current_source, current_source_path
-    global frame_interval, person_counter, video_fps, _start_time
-    global sleep_tracker, mask_tracker, result_human, result_cig, result_mask
+    global frame_interval, video_fps, _start_time
+    global sleep_tracker, result_human, result_cig, result_mask
     global result_no_mask, result_fire, result_smoke, result_sleep, annotated_frame, annotated_jpeg
     global latest_frame
 
@@ -636,9 +608,7 @@ def start_detection(source_type, source_path=None):
     latest_frame = None
     annotated_frame = None
     annotated_jpeg = None
-    person_counter = 0
     sleep_tracker.clear()
-    mask_tracker.clear()
     result_human.clear()
     result_cig.clear()
     result_mask.clear()
