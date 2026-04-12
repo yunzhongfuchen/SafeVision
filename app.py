@@ -76,6 +76,7 @@ def api_logs():
         "cig": ("🚬 抽烟", "log-cig"),
         "no_mask": ("😷 未戴口罩", "log-no_mask"),
         "sleep": ("💤 睡岗", "log-sleep"),
+        "uniform": ("🦺 未穿工服", "log-uniform"),
     }
     result = []
     for entry in entries:
@@ -122,6 +123,7 @@ def api_admin_logs():
         "cig": ("🚬 抽烟", "log-cig"),
         "no_mask": ("😷 未戴口罩", "log-no_mask"),
         "sleep": ("💤 睡岗", "log-sleep"),
+        "uniform": ("🦺 未穿工服", "log-uniform"),
     }
     result = []
     for entry in entries:
@@ -140,7 +142,7 @@ def api_admin_logs():
 def api_admin_stats():
     """Return admin page stat summary as JSON."""
     logs = engine.get_log_entries()
-    counts = {"fire": 0, "smoke": 0, "cig": 0, "no_mask": 0, "sleep": 0}
+    counts = {"fire": 0, "smoke": 0, "cig": 0, "no_mask": 0, "sleep": 0, "uniform": 0}
     for entry in logs:
         counts[entry.event_type] = counts.get(entry.event_type, 0) + 1
     total = sum(counts.values())
@@ -202,6 +204,7 @@ CUSTOM_CSS = """
 .stat-cig   { background: #d1fae5; color: #059669; }
 .stat-mask  { background: #dbeafe; color: #2563eb; }
 .stat-sleep { background: #ede9fe; color: #7c3aed; }
+.stat-uniform { background: #d1fae5; color: #059669; }
 
 /* ============ Video Player ============ */
 .video-wrapper {
@@ -332,6 +335,7 @@ CUSTOM_CSS = """
 .log-cig { background: #fef3c7; color: #d97706; border-left: 3px solid #d97706; }
 .log-no_mask { background: #dbeafe; color: #2563eb; border-left: 3px solid #2563eb; }
 .log-sleep { background: #ede9fe; color: #7c3aed; border-left: 3px solid #7c3aed; }
+.log-uniform { background: #d1fae5; color: #059669; border-left: 3px solid #059669; }
 
 /* ============ Fire Alert Indicator ============ */
 .fire-alert {
@@ -436,6 +440,7 @@ STATS_HTML = """
     <span class="stat-card stat-cig">🚬 抽烟: <span id="stat-cig">0</span></span>
     <span class="stat-card stat-mask">😷 未戴: <span id="stat-mask">0</span></span>
     <span class="stat-card stat-sleep">💤 睡岗: <span id="stat-sleep">0</span></span>
+    <span class="stat-card stat-uniform">🦺 工服: <span id="stat-uniform">0</span></span>
 </div>
 """
 
@@ -484,6 +489,7 @@ def update_stats():
         <span class="stat-card stat-cig">🚬 抽烟: {stats['cig']}</span>
         <span class="stat-card stat-mask">😷 未戴: {stats['no_mask']}</span>
         <span class="stat-card stat-sleep">💤 睡岗: {stats['sleep']}</span>
+        <span class="stat-card stat-uniform">🦺 工服: {stats['uniform']}</span>
     </div>
     """
 
@@ -500,6 +506,7 @@ def update_logs():
         "cig": ("🚬 抽烟", "log-cig"),
         "no_mask": ("😷 未戴口罩", "log-no_mask"),
         "sleep": ("💤 睡岗", "log-sleep"),
+        "uniform": ("🦺 未穿工服", "log-uniform"),
     }
 
     html = '<div class="log-panel"><div style="padding:8px;">'
@@ -587,6 +594,7 @@ def update_system_status():
         "detect_mask": "口罩检测",
         "detect_fire": "火焰烟雾",
         "detect_sleep": "睡岗检测",
+        "detect_uniform": "工服检测",
         "_render_loop": "渲染输出",
     }
     thread_html = ""
@@ -626,6 +634,7 @@ def update_system_status():
             <span>🚬 抽烟: {stats['cig']}</span>
             <span>😷 未戴: {stats['no_mask']}</span>
             <span>💤 睡岗: {stats['sleep']}</span>
+            <span>🦺 工服: {stats['uniform']}</span>
         </div>
     </div>
     """
@@ -634,7 +643,7 @@ def update_system_status():
 def update_admin_stats():
     """Update admin page stat summary (with no_mask)"""
     logs = engine.get_log_entries()
-    counts = {"fire": 0, "smoke": 0, "cig": 0, "no_mask": 0, "sleep": 0}
+    counts = {"fire": 0, "smoke": 0, "cig": 0, "no_mask": 0, "sleep": 0, "uniform": 0}
     for entry in logs:
         counts[entry.event_type] = counts.get(entry.event_type, 0) + 1
     total = sum(counts.values())
@@ -666,6 +675,10 @@ def update_admin_stats():
             <div style="font-size:20px; color:#7c3aed; font-weight:700;">{counts['sleep']}</div>
             <div style="font-size:10px; color:#5b21b6;">睡岗 ({pct('sleep')})</div>
         </div>
+        <div style="background:#d1fae5; padding:10px 16px; border-radius:8px; text-align:center; flex:1; min-width:80px;">
+            <div style="font-size:20px; color:#059669; font-weight:700;">{counts['uniform']}</div>
+            <div style="font-size:10px; color:#065f46;">工服 ({pct('uniform')})</div>
+        </div>
     </div>
     """
 
@@ -682,6 +695,7 @@ def update_admin_logs(filter_type="全部"):
         "cig": ("🚬 抽烟", "log-cig"),
         "no_mask": ("😷 未戴口罩", "log-no_mask"),
         "sleep": ("💤 睡岗", "log-sleep"),
+        "uniform": ("🦺 未穿工服", "log-uniform"),
     }
 
     type_filter = None
@@ -744,11 +758,12 @@ def get_config_values():
         alerts["cig"],
         alerts["no_mask"],
         alerts["sleep"],
+        alerts["uniform"],
     )
 
 
 def apply_config(conf_fire, conf_pose, cooldown, sleep_frames,
-                 alert_fire, alert_smoke, alert_cig, alert_no_mask, alert_sleep):
+                 alert_fire, alert_smoke, alert_cig, alert_no_mask, alert_sleep, alert_uniform):
     """Apply configuration from admin page"""
     engine.set_config("conf_fire", conf_fire)
     engine.set_config("conf_pose", conf_pose)
@@ -759,6 +774,7 @@ def apply_config(conf_fire, conf_pose, cooldown, sleep_frames,
     engine.set_alert("cig", alert_cig)
     engine.set_alert("no_mask", alert_no_mask)
     engine.set_alert("sleep", alert_sleep)
+    engine.set_alert("uniform", alert_uniform)
     return "✅ 配置已应用"
 
 
@@ -815,7 +831,7 @@ with gr.Blocks(title="AI 视频监控", css=CUSTOM_CSS, theme=gr.themes.Soft()) 
                     )
                     with gr.Row():
                         log_filter = gr.Dropdown(
-                            choices=["全部", "🔥 明火", "🌫️ 烟雾", "🚬 抽烟", "😷 未戴口罩", "💤 睡岗"],
+                            choices=["全部", "🔥 明火", "🌫️ 烟雾", "🚬 抽烟", "😷 未戴口罩", "💤 睡岗", "🦺 未穿工服"],
                             value="全部",
                             label="筛选类型",
                             scale=1,
@@ -842,6 +858,7 @@ with gr.Blocks(title="AI 视频监控", css=CUSTOM_CSS, theme=gr.themes.Soft()) 
                             alert_cig = gr.Checkbox(label="🚬 抽烟告警", value=True)
                             alert_no_mask = gr.Checkbox(label="😷 未戴口罩告警", value=True)
                             alert_sleep = gr.Checkbox(label="💤 睡岗告警", value=True)
+                            alert_uniform = gr.Checkbox(label="🦺 未穿工服告警", value=True)
                     apply_config_btn = gr.Button("✅ 应用配置", variant="primary")
                     config_status = gr.Textbox(label="", interactive=False, visible=False)
 
@@ -872,7 +889,7 @@ with gr.Blocks(title="AI 视频监控", css=CUSTOM_CSS, theme=gr.themes.Soft()) 
             apply_config_btn.click(
                 apply_config,
                 inputs=[conf_fire, conf_pose, log_cooldown, sleep_frames,
-                        alert_fire, alert_smoke, alert_cig, alert_no_mask, alert_sleep],
+                        alert_fire, alert_smoke, alert_cig, alert_no_mask, alert_sleep, alert_uniform],
                 outputs=[config_status],
             )
             export_btn.click(export_logs, outputs=[export_status])
@@ -954,6 +971,8 @@ function() {
             if (el) el.textContent = s.no_mask;
             el = document.getElementById('stat-sleep');
             if (el) el.textContent = s.sleep;
+            el = document.getElementById('stat-uniform');
+            if (el) el.textContent = s.uniform;
         }).catch(function(){});
     }
 
@@ -1050,7 +1069,8 @@ function() {
             var threadNames = {
                 'detect_human': '人体检测', 'detect_cig': '抽烟检测',
                 'detect_mask': '口罩检测', 'detect_fire': '火焰烟雾',
-                'detect_sleep': '睡岗检测', '_render_loop': '渲染输出'
+                'detect_sleep': '睡岗检测', 'detect_uniform': '工服检测',
+                '_render_loop': '渲染输出'
             };
             var threadHtml = '';
             for (var key in threadNames) {
@@ -1111,6 +1131,9 @@ function() {
             html += '<div style="background:#ede9fe; padding:10px 16px; border-radius:8px; text-align:center; flex:1; min-width:80px;">';
             html += '<div style="font-size:20px; color:#7c3aed; font-weight:700;">' + c.sleep + '</div>';
             html += '<div style="font-size:10px; color:#5b21b6;">睡岗 (' + p.sleep + ')</div></div>';
+            html += '<div style="background:#d1fae5; padding:10px 16px; border-radius:8px; text-align:center; flex:1; min-width:80px;">';
+            html += '<div style="font-size:20px; color:#059669; font-weight:700;">' + c.uniform + '</div>';
+            html += '<div style="font-size:10px; color:#065f46;">工服 (' + p.uniform + ')</div></div>';
             html += '</div>';
             el.innerHTML = html;
         }).catch(function(){});

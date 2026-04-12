@@ -10,6 +10,7 @@ from PIL import Image, ImageDraw, ImageFont
 from ultralytics import YOLO
 from modelscope.pipelines import pipeline
 from modelscope.utils.constant import Tasks
+from huggingface_hub import hf_hub_download
 import sleep_detect
 
 
@@ -38,6 +39,15 @@ mask_model = pipeline(
 fire_model = YOLO("fire.pt")
 sleep_pose_model = YOLO("yolov8s-pose.pt")
 
+# Load PPE detection model from HuggingFace
+print("Downloading uniform model from HuggingFace...")
+_uniform_model_path = hf_hub_download(
+    repo_id="melihuzunoglu/ppe-detection",
+    filename="best.pt"
+)
+uniform_model = YOLO(_uniform_model_path)
+print(f"Uniform model loaded, classes: {uniform_model.names}")
+
 
 # ======================
 # Shared State
@@ -61,6 +71,7 @@ result_no_mask = {}
 result_fire = {}
 result_smoke = {}
 result_sleep = {}
+result_uniform = {}
 
 # State trackers
 sleep_tracker = {}
@@ -156,6 +167,7 @@ _config = {
         "cig": True,
         "no_mask": True,
         "sleep": True,
+        "uniform": True,
     },
 }
 _config_lock = threading.Lock()
@@ -213,6 +225,7 @@ _SNAPSHOT_COLORS = {
     "cig": (0, 0, 255),
     "no_mask": (0, 165, 255),
     "sleep": (255, 0, 255),
+    "uniform": (0, 0, 255),
 }
 
 _SNAPSHOT_LABELS = {
@@ -221,6 +234,7 @@ _SNAPSHOT_LABELS = {
     "cig": "Cigarette",
     "no_mask": "No Mask",
     "sleep": "Sleeping",
+    "uniform": "No Vest",
 }
 
 
@@ -278,7 +292,7 @@ def export_logs_csv():
     writer.writerow(["时间", "类型", "置信度"])
     type_map = {
         "fire": "明火", "smoke": "烟雾", "cig": "抽烟",
-        "no_mask": "未戴口罩", "sleep": "睡岗",
+        "no_mask": "未戴口罩", "sleep": "睡岗", "uniform": "未穿工服",
     }
     for entry in entries:
         writer.writerow([entry.time, type_map.get(entry.event_type, entry.event_type), f"{entry.score:.2f}"])
@@ -405,6 +419,61 @@ def detect_fire():
             for box, score in zip(smoke_boxes, smoke_scores):
                 snap = _capture_snapshot(frame, "smoke", score, box)
                 add_log_entry("smoke", score, box, snap)
+        except Exception:
+            pass
+        tick()
+        time.sleep(0.01)
+
+
+def detect_uniform():
+    """工服检测线程 — 检测未穿反光背心的人员。"""
+    global result_uniform
+    tick, get_fps = _track_thread_fps("detect_uniform")
+    conf_val = get_config_value("conf_uniform") or 0.25
+
+    while running:
+        if latest_frame is None:
+            time.sleep(0.05)
+            continue
+        frame = latest_frame.copy()
+        try:
+            r = uniform_model(frame, conf=conf_val, verbose=False)
+            vest_boxes, vest_scores = [], []
+            human_boxes, human_scores = [], []
+            all_boxes, all_scores, all_classes = [], [], []
+            if r and r[0].boxes is not None:
+                for b in r[0].boxes:
+                    x1, y1, x2, y2 = map(int, b.xyxy[0])
+                    cls_id = int(b.cls[0])
+                    cls_name = r[0].names.get(cls_id, "")
+                    score = float(b.conf[0])
+                    if cls_name == "vest":
+                        vest_boxes.append([x1, y1, x2, y2])
+                        vest_scores.append(score)
+                    elif cls_name == "human":
+                        human_boxes.append([x1, y1, x2, y2])
+                        human_scores.append(score)
+                    # Collect all for rendering
+                    all_boxes.append([x1, y1, x2, y2])
+                    all_scores.append(score)
+                    all_classes.append(cls_name)
+            result_uniform = {
+                "boxes": all_boxes,
+                "scores": all_scores,
+                "classes": all_classes,
+                "vest_boxes": vest_boxes,
+                "vest_scores": vest_scores,
+                "human_boxes": human_boxes,
+                "human_scores": human_scores,
+            }
+            # Log when human count exceeds vest count (missing vest)
+            missing = max(0, len(human_boxes) - len(vest_boxes))
+            if missing > 0:
+                for i, (box, score) in enumerate(zip(human_boxes, human_scores)):
+                    snap = _capture_snapshot(frame, "uniform", score, box)
+                    add_log_entry("uniform", score, box, snap)
+                    if i >= missing - 1:
+                        break
         except Exception:
             pass
         tick()
@@ -613,6 +682,19 @@ def _render_loop():
             cv2.putText(frame, f'smoke {score:.2f}', (x1, y1 - 5),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
 
+        # Uniform/vest detection boxes
+        r_uniform = dict(result_uniform)
+        for box, score, cls in zip(
+            r_uniform.get('boxes', []),
+            r_uniform.get('scores', []),
+            r_uniform.get('classes', []),
+        ):
+            x1, y1, x2, y2 = [int(v) for v in box]
+            color = (0, 255, 0) if cls == "vest" else (255, 255, 0)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(frame, f'{cls} {score:.2f}', (x1, y1 - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+
         # Sleep detection boxes + skeleton
         for entry in result_sleep:
             box = entry['box']
@@ -718,6 +800,7 @@ def start_detection(source_type, source_path=None):
     result_fire.clear()
     result_smoke.clear()
     result_sleep.clear()
+    result_uniform.clear()
 
     current_source = source_type
     current_source_path = source_path
@@ -735,6 +818,7 @@ def start_detection(source_type, source_path=None):
         ("detect_mask", detect_mask),
         ("detect_fire", detect_fire),
         ("detect_sleep", detect_sleep),
+        ("detect_uniform", detect_uniform),
         ("_render_loop", _render_loop),
     ]
 
@@ -761,4 +845,5 @@ def get_stats():
         "cig": len(result_cig.get('boxes', [])),
         "no_mask": len(result_no_mask.get('boxes', [])),
         "sleep": sum(1 for s in result_sleep if s.get("_info", {}).get("is_sleeping")),
+        "uniform": max(0, len(result_uniform.get("human_boxes", [])) - len(result_uniform.get("vest_boxes", []))),
     }
