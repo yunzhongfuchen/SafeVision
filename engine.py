@@ -495,6 +495,7 @@ def detect_sleep():
                 "score": det['score'],
                 "posture_label": det['posture_label'],
                 "sleep_confidence": det['sleep_confidence'],
+                "keypoints": det.get('keypoints'),
             })
             if tracker["sleeping"]:
                 snap = _capture_snapshot(frame, "sleep", det['score'], det['box'])
@@ -554,6 +555,39 @@ def _render_loop():
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
             cv2.putText(frame, f'smoke {score:.2f}', (x1, y1 - 5),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+
+        # Sleep detection boxes + skeleton
+        skeleton_pairs = [
+            (5, 6), (5, 7), (7, 9), (6, 8), (8, 10),
+            (5, 11), (6, 12), (11, 12),
+            (11, 13), (13, 15), (12, 14), (14, 16),
+        ]
+        kpt_colors = [
+            (0, 0, 255), (255, 0, 0), (255, 0, 0), (255, 128, 0), (255, 128, 0),
+            (0, 255, 0), (0, 255, 0), (0, 255, 128), (0, 255, 128),
+            (128, 255, 0), (128, 255, 0), (255, 255, 0), (255, 255, 0),
+            (0, 128, 255), (0, 128, 255), (255, 0, 255), (255, 0, 255),
+        ]
+        for entry in result_sleep:
+            box = entry['box']
+            x1, y1, x2, y2 = map(int, box)
+            color = (0, 255, 255) if entry['sleeping'] else (255, 0, 0)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            label = f"{'睡岗' if entry['sleeping'] else entry['posture_label']} {entry['sleep_confidence']:.2f}"
+            cv2.putText(frame, label, (x1, y1 - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+            # Draw skeleton
+            kp = entry.get('keypoints')
+            if kp is not None and len(kp) >= 17:
+                for a, b in skeleton_pairs:
+                    if float(kp[a, 2]) > 0.4 and float(kp[b, 2]) > 0.4:
+                        pt_a = (int(kp[a, 0]), int(kp[a, 1]))
+                        pt_b = (int(kp[b, 0]), int(kp[b, 1]))
+                        cv2.line(frame, pt_a, pt_b, (0, 255, 0), 2)
+                for i in range(len(kp)):
+                    if float(kp[i, 2]) > 0.4:
+                        x, y = int(kp[i, 0]), int(kp[i, 1])
+                        cv2.circle(frame, (x, y), 5, kpt_colors[i], -1)
 
         annotated_frame = frame
         try:
