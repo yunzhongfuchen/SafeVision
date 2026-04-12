@@ -498,6 +498,7 @@ def detect_sleep():
                 "posture_label": det['posture_label'],
                 "sleep_confidence": det['sleep_confidence'],
                 "keypoints": det.get('keypoints'),
+                "_info": det.get('_info', {}),
             })
             if tracker["sleeping"]:
                 snap = _capture_snapshot(frame, "sleep", det['score'], det['box'])
@@ -510,23 +511,60 @@ def detect_sleep():
 
 # ======================
 # Render Thread
-def _put_text(img, text, pos, color, font_size=18):
-    """Draw text with Chinese support via PIL."""
+# ======================
+
+FONT_PATH = 'C:/Windows/Fonts/msyh.ttc'
+KPT_CONF_THRESHOLD = 0.4
+SKELETON = [
+    (0, 1), (0, 2), (1, 3), (2, 4),
+    (5, 6), (5, 7), (7, 9), (6, 8), (8, 10),
+    (5, 11), (6, 12), (11, 12),
+    (11, 13), (13, 15), (12, 14), (14, 16),
+]
+KPT_COLORS = [
+    (0, 0, 255), (255, 0, 0), (255, 0, 0), (255, 128, 0), (255, 128, 0),
+    (0, 255, 0), (0, 255, 0), (0, 255, 128), (0, 255, 128),
+    (128, 255, 0), (128, 255, 0), (255, 255, 0), (255, 255, 0),
+    (0, 128, 255), (0, 128, 255), (255, 0, 255), (255, 0, 255),
+]
+POSTURE_LABELS = {
+    'face_up': '仰卧',
+    'face_down': '俯卧',
+    'side': '侧卧',
+    'standing/sitting': '站立/坐姿',
+    'not sleeping': '未睡眠',
+}
+
+
+def load_font(size):
+    try:
+        return ImageFont.truetype(FONT_PATH, size)
+    except:
+        return ImageFont.load_default()
+
+
+def draw_chinese_text(img, text, x, y, color=(255, 255, 255), font_size=22,
+                      bg_color=None, padding=5):
+    """使用 PIL 绘制中文文字，返回文字占用的宽高"""
     try:
         pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
         draw = ImageDraw.Draw(pil_img, 'RGBA')
-        try:
-            font = ImageFont.truetype("msyh.ttc", font_size)
-        except:
-            font = ImageFont.load_default()
-        draw.text(pos, text, fill=tuple(reversed(color)), font=font)
+        font = load_font(font_size)
+        bbox = draw.textbbox((0, 0), text, font=font)
+        tw = bbox[2] - bbox[0]
+        th = bbox[3] - bbox[1]
+        if bg_color:
+            bg_rgba = (*bg_color, 200) if len(bg_color) == 3 else bg_color
+            draw.rectangle(
+                [x - padding, y - th - padding, x + tw + padding, y + padding],
+                fill=bg_rgba
+            )
+        draw.text((x, y), text, fill=tuple(reversed(color)), font=font)
         img[:] = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+        return tw + padding * 2, th + padding * 2
     except Exception:
-        cv2.putText(img, text.encode('ascii', 'ignore').decode(), pos,
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 1)
-
-
-# ======================
+        cv2.putText(img, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 1)
+        return 0, 0
 
 
 def _render_loop():
@@ -575,36 +613,48 @@ def _render_loop():
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
 
         # Sleep detection boxes + skeleton
-        skeleton_pairs = [
-            (5, 6), (5, 7), (7, 9), (6, 8), (8, 10),
-            (5, 11), (6, 12), (11, 12),
-            (11, 13), (13, 15), (12, 14), (14, 16),
-        ]
-        kpt_colors = [
-            (0, 0, 255), (255, 0, 0), (255, 0, 0), (255, 128, 0), (255, 128, 0),
-            (0, 255, 0), (0, 255, 0), (0, 255, 128), (0, 255, 128),
-            (128, 255, 0), (128, 255, 0), (255, 255, 0), (255, 255, 0),
-            (0, 128, 255), (0, 128, 255), (255, 0, 255), (255, 0, 255),
-        ]
         for entry in result_sleep:
             box = entry['box']
-            x1, y1, x2, y2 = map(int, box)
-            color = (0, 255, 255) if entry['sleeping'] else (0, 0, 255)
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-            label = f"睡岗 {entry['sleep_confidence']:.2f}" if entry['sleeping'] else f"{entry['posture_label']} {entry['sleep_confidence']:.2f}"
-            _put_text(frame, label, (x1, max(0, y1 - 20)), color, font_size=16)
-            # Draw skeleton
+            x1, y1, x2, y2 = [int(v) for v in box]
+            info = entry.get('_info', {})
             kp = entry.get('keypoints')
+            posture_cn = POSTURE_LABELS.get(info.get('posture', ''), '')
+
+            if info.get('is_sleeping'):
+                box_color = (0, 255, 255)
+                status_text = "[ 睡眠中 ]  " + posture_cn
+                status_color = (0, 255, 255)
+            else:
+                box_color = (0, 0, 255)
+                status_text = "[ 未睡眠 ]  " + posture_cn
+                status_color = (100, 100, 255)
+
+            cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 3)
+
+            # 状态行
+            _, h1 = draw_chinese_text(frame, status_text, x1, max(0, y1 - 60),
+                                       color=status_color, font_size=22,
+                                       bg_color=(0, 0, 0))
+
+            # 置信度行
+            conf_text = f"睡眠: {info.get('sleep_confidence', 0):.0%}  |  睡姿: {info.get('posture_confidence', 0):.0%}"
+            draw_chinese_text(frame, conf_text, x1, max(0, y1 - 60) + h1 + 2,
+                              color=(220, 220, 220), font_size=18,
+                              bg_color=(0, 0, 0))
+
+            # 骨架
             if kp is not None and len(kp) >= 17:
-                for a, b in skeleton_pairs:
-                    if float(kp[a, 2]) > 0.4 and float(kp[b, 2]) > 0.4:
-                        pt_a = (int(kp[a, 0]), int(kp[a, 1]))
-                        pt_b = (int(kp[b, 0]), int(kp[b, 1]))
-                        cv2.line(frame, pt_a, pt_b, (0, 255, 0), 2)
+                for a, b in SKELETON:
+                    if float(kp[a, 2]) > KPT_CONF_THRESHOLD and float(kp[b, 2]) > KPT_CONF_THRESHOLD:
+                        pt1 = (int(kp[a, 0]), int(kp[a, 1]))
+                        pt2 = (int(kp[b, 0]), int(kp[b, 1]))
+                        cv2.line(frame, pt1, pt2, (0, 255, 0), 3)
+                        cv2.line(frame, pt1, pt2, (0, 180, 0), 1)
                 for i in range(len(kp)):
-                    if float(kp[i, 2]) > 0.4:
+                    if float(kp[i, 2]) > KPT_CONF_THRESHOLD:
                         x, y = int(kp[i, 0]), int(kp[i, 1])
-                        cv2.circle(frame, (x, y), 5, kpt_colors[i], -1)
+                        cv2.circle(frame, (x, y), 6, KPT_COLORS[i], -1)
+                        cv2.circle(frame, (x, y), 8, (255, 255, 255), 1)
 
         annotated_frame = frame
         try:
