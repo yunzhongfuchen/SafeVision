@@ -159,6 +159,7 @@ def get_system_status():
 _config = {
     "conf_fire": 0.25,
     "conf_pose": 0.25,
+    "conf_uniform": 0.25,
     "log_cooldown": 5.0,
     "sleep_frames": 150,
     "alerts": {
