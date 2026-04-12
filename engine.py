@@ -1,10 +1,12 @@
 """AI Video Surveillance Detection Engine"""
 
 import cv2
+import numpy as np
 import base64
 import threading
 import time
 from datetime import datetime
+from PIL import Image, ImageDraw, ImageFont
 from ultralytics import YOLO
 from modelscope.pipelines import pipeline
 from modelscope.utils.constant import Tasks
@@ -508,6 +510,22 @@ def detect_sleep():
 
 # ======================
 # Render Thread
+def _put_text(img, text, pos, color, font_size=18):
+    """Draw text with Chinese support via PIL."""
+    try:
+        pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+        draw = ImageDraw.Draw(pil_img, 'RGBA')
+        try:
+            font = ImageFont.truetype("msyh.ttc", font_size)
+        except:
+            font = ImageFont.load_default()
+        draw.text(pos, text, fill=tuple(reversed(color)), font=font)
+        img[:] = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+    except Exception:
+        cv2.putText(img, text.encode('ascii', 'ignore').decode(), pos,
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 1)
+
+
 # ======================
 
 
@@ -571,11 +589,10 @@ def _render_loop():
         for entry in result_sleep:
             box = entry['box']
             x1, y1, x2, y2 = map(int, box)
-            color = (0, 255, 255) if entry['sleeping'] else (255, 0, 0)
+            color = (0, 255, 255) if entry['sleeping'] else (0, 0, 255)
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-            label = f"{'睡岗' if entry['sleeping'] else entry['posture_label']} {entry['sleep_confidence']:.2f}"
-            cv2.putText(frame, label, (x1, y1 - 5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+            label = f"睡岗 {entry['sleep_confidence']:.2f}" if entry['sleeping'] else f"{entry['posture_label']} {entry['sleep_confidence']:.2f}"
+            _put_text(frame, label, (x1, max(0, y1 - 20)), color, font_size=16)
             # Draw skeleton
             kp = entry.get('keypoints')
             if kp is not None and len(kp) >= 17:
