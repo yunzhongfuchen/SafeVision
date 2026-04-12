@@ -500,7 +500,8 @@ def detect_sleep():
                 "keypoints": det.get('keypoints'),
                 "_info": det.get('_info', {}),
             })
-            if tracker["sleeping"]:
+            # Log on instantaneous detection (same signal shown on display)
+            if det['sleeping']:
                 snap = _capture_snapshot(frame, "sleep", det['score'], det['box'])
                 add_log_entry("sleep", det['score'], det['box'], snap)
 
@@ -710,8 +711,6 @@ def start_detection(source_type, source_path=None):
     annotated_frame = None
     annotated_jpeg = None
     sleep_tracker.clear()
-    last_log_time.clear()
-    log_entries.clear()
     result_human.clear()
     result_cig.clear()
     result_mask.clear()
@@ -761,5 +760,5 @@ def get_stats():
         "smoke": len(result_smoke.get('boxes', [])),
         "cig": len(result_cig.get('boxes', [])),
         "no_mask": len(result_no_mask.get('boxes', [])),
-        "sleep": sum(1 for s in result_sleep if s.get("sleeping")),
+        "sleep": sum(1 for s in result_sleep if s.get("_info", {}).get("is_sleeping")),
     }
