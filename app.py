@@ -138,6 +138,13 @@ def api_admin_logs():
     return {"logs": result}
 
 
+@flask_app.route("/api/clear-logs", methods=["POST"])
+def api_clear_logs():
+    """Clear all logs."""
+    engine.clear_logs()
+    return {"status": "ok"}
+
+
 @flask_app.route("/api/admin-stats")
 def api_admin_stats():
     """Return admin page stat summary as JSON."""
@@ -436,7 +443,7 @@ CUSTOM_CSS = """
 STATS_HTML = """
 <div class="stat-bar">
     <span class="stat-card stat-fire">🔥 明火: <span id="stat-fire">0</span></span>
-    <span class="stat-card stat-smoke">🌫️ 烟: <span id="stat-smoke">0</span></span>
+    <span class="stat-card stat-smoke">🌫️ 烟雾: <span id="stat-smoke">0</span></span>
     <span class="stat-card stat-cig">🚬 抽烟: <span id="stat-cig">0</span></span>
     <span class="stat-card stat-mask">😷 未戴: <span id="stat-mask">0</span></span>
     <span class="stat-card stat-sleep">💤 睡岗: <span id="stat-sleep">0</span></span>
@@ -485,7 +492,7 @@ def update_stats():
     return f"""
     <div class="stat-bar">
         <span class="stat-card stat-fire">🔥 明火: {stats['fire']}</span>
-        <span class="stat-card stat-smoke">🌫️ 烟: {stats['smoke']}</span>
+        <span class="stat-card stat-smoke">🌫️ 烟雾: {stats['smoke']}</span>
         <span class="stat-card stat-cig">🚬 抽烟: {stats['cig']}</span>
         <span class="stat-card stat-mask">😷 未戴: {stats['no_mask']}</span>
         <span class="stat-card stat-sleep">💤 睡岗: {stats['sleep']}</span>
@@ -629,7 +636,7 @@ def update_system_status():
         <div style="font-size:13px; font-weight:600; margin-bottom:4px;">当前帧目标数</div>
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px; font-size:12px;">
             <span>🔥 明火: {stats['fire']}</span>
-            <span>🌫️ 烟: {stats['smoke']}</span>
+            <span>🌫️ 烟雾: {stats['smoke']}</span>
             <span>🚬 抽烟: {stats['cig']}</span>
             <span>😷 未戴: {stats['no_mask']}</span>
             <span>💤 睡岗: {stats['sleep']}</span>
@@ -771,7 +778,6 @@ def get_config_values():
         display.get("cig", True),
         display.get("no_mask", True),
         display.get("sleep", True),
-        display.get("sleep_skeleton", False),
         display.get("uniform", True),
     )
 
@@ -780,7 +786,7 @@ def apply_config(conf_fire, conf_cig, conf_mask, conf_pose, conf_uniform,
                  frames_fire, frames_cig, frames_mask, frames_sleep, frames_uniform,
                  log_cooldown,
                  alert_fire, alert_smoke, alert_cig, alert_no_mask, alert_sleep, alert_uniform,
-                 display_fire, display_smoke, display_cig, display_no_mask, display_sleep, display_sleep_skeleton, display_uniform):
+                 display_fire, display_smoke, display_cig, display_no_mask, display_sleep, display_uniform):
     """Apply configuration from admin page"""
     engine.set_config("conf_fire", conf_fire)
     engine.set_config("conf_cig", conf_cig)
@@ -804,7 +810,6 @@ def apply_config(conf_fire, conf_cig, conf_mask, conf_pose, conf_uniform,
     engine.set_display("cig", display_cig)
     engine.set_display("no_mask", display_no_mask)
     engine.set_display("sleep", display_sleep)
-    engine.set_display("sleep_skeleton", display_sleep_skeleton)
     engine.set_display("uniform", display_uniform)
     return "✅ 配置已应用"
 
@@ -882,7 +887,6 @@ with gr.Blocks(title="AI 视频监控", css=CUSTOM_CSS, theme=gr.themes.Soft()) 
                             display_cig = gr.Checkbox(label="抽烟", value=True)
                             display_no_mask = gr.Checkbox(label="未戴口罩", value=True)
                             display_sleep = gr.Checkbox(label="睡岗", value=True)
-                            display_sleep_skeleton = gr.Checkbox(label="睡岗骨架", value=False)
                             display_uniform = gr.Checkbox(label="工服", value=True)
                     apply_config_btn = gr.Button("✅ 应用配置", variant="primary")
                     config_status = gr.Textbox(label="", interactive=False, visible=False)
@@ -934,7 +938,15 @@ with gr.Blocks(title="AI 视频监控", css=CUSTOM_CSS, theme=gr.themes.Soft()) 
                 return v;
             }
             """)
-            clear_log_btn.click(do_clear_logs, outputs=[admin_log])
+            clear_log_btn.click(None, js="""
+            function() {
+                fetch('http://' + window.location.hostname + ':5000/api/clear-logs').then(function(){
+                    window.lastAdminLogCount = -1;
+                    if (window.updateAdminLogs) window.updateAdminLogs();
+                });
+                return '✅ 日志已清空';
+            }
+            """, outputs=[admin_log])
 
             # Config events
             apply_config_btn.click(
@@ -943,7 +955,7 @@ with gr.Blocks(title="AI 视频监控", css=CUSTOM_CSS, theme=gr.themes.Soft()) 
                         frames_fire, frames_cig, frames_mask, frames_sleep, frames_uniform,
                         log_cooldown,
                         alert_fire, alert_smoke, alert_cig, alert_no_mask, alert_sleep, alert_uniform,
-                        display_fire, display_smoke, display_cig, display_no_mask, display_sleep, display_sleep_skeleton, display_uniform],
+                        display_fire, display_smoke, display_cig, display_no_mask, display_sleep, display_uniform],
                 outputs=[config_status],
             )
             export_btn.click(export_logs, outputs=[export_status])
@@ -1139,7 +1151,7 @@ function() {
             var statsHtml = '<div style="display:grid; grid-template-columns:1fr 1fr; gap:4px; font-size:12px;">';
             if (s.stats) {
                 statsHtml += '<span>🔥 明火: ' + s.stats.fire + '</span>';
-                statsHtml += '<span>🌫️ 烟: ' + s.stats.smoke + '</span>';
+                statsHtml += '<span>🌫️ 烟雾: ' + s.stats.smoke + '</span>';
                 statsHtml += '<span>🚬 抽烟: ' + s.stats.cig + '</span>';
                 statsHtml += '<span>😷 未戴: ' + s.stats.no_mask + '</span>';
                 statsHtml += '<span>💤 睡岗: ' + s.stats.sleep + '</span>';
@@ -1193,10 +1205,10 @@ function() {
         }).catch(function(){});
     }
 
-    var lastAdminLogCount = -1;  // -1 ensures first run always updates
-    var currentAdminLogFilter = '全部';
-    function updateAdminLogs() {
-        var filter = currentAdminLogFilter;
+    window.lastAdminLogCount = -1;  // -1 ensures first run always updates
+    window.currentAdminLogFilter = '全部';
+    window.updateAdminLogs = function() {
+        var filter = window.currentAdminLogFilter;
         fetch(API + '/api/admin-logs').then(function(r){return r.json();}).then(function(d){
             var logs = d.logs;
             if (logs.length === lastAdminLogCount) return;
