@@ -93,17 +93,29 @@ def api_logs():
 
 @flask_app.route("/api/fire-alert")
 def api_fire_alert():
-    """Return fire alert status as JSON."""
+    """Return fire alert status as JSON.
+
+    Once fire is detected, the alert stays active for FIRE_ALERT_DURATION seconds,
+    even if fire disappears from the current frame.
+    """
     from flask import jsonify
-    has_fire = engine.get_stats()['fire'] > 0
-    global fire_muted_until, fire_mute_lock
+    global fire_detected_at, fire_muted_until
+    has_fire_now = engine.get_stats()['fire'] > 0
+    now = time.time()
+    with fire_alert_lock:
+        if has_fire_now and fire_detected_at == 0.0:
+            fire_detected_at = now
+        elif has_fire_now:
+            fire_detected_at = now  # refresh timer while fire is present
+        # Check if we're still within the alert window
+        alert_active = (fire_detected_at > 0) and (now - fire_detected_at < FIRE_ALERT_DURATION)
     with fire_mute_lock:
         muted = time.time() < fire_muted_until
     if muted:
         remaining = max(0, int(fire_muted_until - time.time()))
     else:
         remaining = 0
-    return {"has_fire": has_fire, "muted": muted, "remaining": remaining}
+    return {"has_fire": alert_active, "muted": muted, "remaining": remaining}
 
 
 @flask_app.route("/api/system-status")
@@ -177,9 +189,10 @@ def api_admin_stats():
 @flask_app.route("/api/mute-fire", methods=["POST"])
 def api_mute_fire():
     """Mute fire alarm for 30 seconds."""
-    global fire_muted_until, fire_mute_lock
+    global fire_muted_until, fire_detected_at
     with fire_mute_lock:
         fire_muted_until = time.time() + 30
+        fire_detected_at = 0.0  # reset alert timer so it doesn't re-trigger after mute
     return {"status": "muted"}
 
 
@@ -483,13 +496,17 @@ FIRE_ALERT_HTML = """
 
 fire_muted_until = 0.0
 fire_mute_lock = threading.Lock()
+fire_detected_at = 0.0
+fire_alert_lock = threading.Lock()
+FIRE_ALERT_DURATION = 30  # seconds
 
 
 def mute_fire():
     """Mute fire alarm for 30 seconds"""
-    global fire_muted_until
+    global fire_muted_until, fire_detected_at
     with fire_mute_lock:
         fire_muted_until = time.time() + 30
+        fire_detected_at = 0.0
 
 
 def is_fire_muted():
