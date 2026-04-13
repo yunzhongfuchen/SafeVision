@@ -175,11 +175,11 @@ def get_system_status():
 
 _config = {
     # Thresholds
-    "conf_fire": 0.25,
-    "conf_cig": 0.25,
-    "conf_mask": 0.25,
-    "conf_pose": 0.25,
-    "conf_uniform": 0.25,
+    "conf_fire": 0.35,
+    "conf_cig": 0.35,
+    "conf_mask": 0.35,
+    "conf_pose": 0.35,
+    "conf_uniform": 0.35,
 
     # Frame counts for consecutive detection
     "frames_fire": 5,
@@ -197,13 +197,13 @@ _config = {
         "uniform": True,
     },
     "display": {
-        "fire": True,
-        "smoke": True,
-        "cig": True,
-        "no_mask": True,
-        "sleep": True,
+        "fire": False,
+        "smoke": False,
+        "cig": False,
+        "no_mask": False,
+        "sleep": False,
         "sleep_skeleton": False,
-        "uniform": True,
+        "uniform": False,
     },
     "log_cooldown": 5.0,
 }

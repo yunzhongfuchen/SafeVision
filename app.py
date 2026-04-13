@@ -785,12 +785,12 @@ def get_config_values():
         alerts["no_mask"],
         alerts["sleep"],
         alerts["uniform"],
-        display.get("fire", True),
-        display.get("smoke", True),
-        display.get("cig", True),
-        display.get("no_mask", True),
-        display.get("sleep", True),
-        display.get("uniform", True),
+        display.get("fire", False),
+        display.get("smoke", False),
+        display.get("cig", False),
+        display.get("no_mask", False),
+        display.get("sleep", False),
+        display.get("uniform", False),
     )
 
 
@@ -871,11 +871,11 @@ with gr.Blocks(title="AI 视频监控", css=CUSTOM_CSS, theme=gr.themes.Soft()) 
                     with gr.Row():
                         with gr.Column():
                             gr.Markdown("**▸ 阈值设定**")
-                            conf_fire = gr.Slider(0.1, 0.9, value=0.25, step=0.05, label="明火/烟雾检测阈值")
-                            conf_cig = gr.Slider(0.1, 0.9, value=0.25, step=0.05, label="抽烟检测阈值")
-                            conf_mask = gr.Slider(0.1, 0.9, value=0.25, step=0.05, label="口罩检测阈值")
-                            conf_pose = gr.Slider(0.1, 0.9, value=0.25, step=0.05, label="睡岗检测阈值")
-                            conf_uniform = gr.Slider(0.1, 0.9, value=0.25, step=0.05, label="工服检测阈值")
+                            conf_fire = gr.Slider(0.1, 0.9, value=0.35, step=0.05, label="明火/烟雾检测阈值")
+                            conf_cig = gr.Slider(0.1, 0.9, value=0.35, step=0.05, label="抽烟检测阈值")
+                            conf_mask = gr.Slider(0.1, 0.9, value=0.35, step=0.05, label="口罩检测阈值")
+                            conf_pose = gr.Slider(0.1, 0.9, value=0.35, step=0.05, label="睡岗检测阈值")
+                            conf_uniform = gr.Slider(0.1, 0.9, value=0.35, step=0.05, label="工服检测阈值")
 
                             gr.Markdown("**▸ 告警开关**")
                             alert_fire = gr.Checkbox(label="明火", value=True)
@@ -894,12 +894,12 @@ with gr.Blocks(title="AI 视频监控", css=CUSTOM_CSS, theme=gr.themes.Soft()) 
                             frames_uniform = gr.Slider(1, 300, value=20, step=1, label="工服判定帧数")
 
                             gr.Markdown("**▸ 检测框显示**")
-                            display_fire = gr.Checkbox(label="明火", value=True)
-                            display_smoke = gr.Checkbox(label="烟雾", value=True)
-                            display_cig = gr.Checkbox(label="抽烟", value=True)
-                            display_no_mask = gr.Checkbox(label="未戴口罩", value=True)
-                            display_sleep = gr.Checkbox(label="睡岗", value=True)
-                            display_uniform = gr.Checkbox(label="工服", value=True)
+                            display_fire = gr.Checkbox(label="明火", value=False)
+                            display_smoke = gr.Checkbox(label="烟雾", value=False)
+                            display_cig = gr.Checkbox(label="抽烟", value=False)
+                            display_no_mask = gr.Checkbox(label="未戴口罩", value=False)
+                            display_sleep = gr.Checkbox(label="睡岗", value=False)
+                            display_uniform = gr.Checkbox(label="工服", value=False)
                     apply_config_btn = gr.Button("✅ 应用配置", variant="primary")
                     config_status = gr.Textbox(label="", interactive=False, visible=False)
                     log_cooldown = gr.Slider(1.0, 15.0, value=5.0, step=0.5, label="日志冷却时间(秒)", visible=False)
