@@ -748,33 +748,70 @@ def get_config_values():
     """Return current config values for UI"""
     cfg = engine.get_config()
     alerts = engine.get_alerts()
+    display = engine.get_display()
     return (
         cfg["conf_fire"],
+        cfg["conf_cig"],
+        cfg["conf_mask"],
         cfg["conf_pose"],
+        cfg["conf_uniform"],
+        cfg["frames_fire"],
+        cfg["frames_cig"],
+        cfg["frames_mask"],
+        cfg["frames_sleep"],
+        cfg["frames_uniform"],
         cfg["log_cooldown"],
-        cfg["sleep_frames"],
         alerts["fire"],
         alerts["smoke"],
         alerts["cig"],
         alerts["no_mask"],
         alerts["sleep"],
         alerts["uniform"],
+        display.get("fire", True),
+        display.get("smoke", True),
+        display.get("cig", True),
+        display.get("no_mask", True),
+        display.get("sleep", True),
+        display.get("sleep_pose", False),
+        display.get("uniform", True),
+        display.get("uniform_helmet", False),
+        display.get("uniform_human", False),
     )
 
 
-def apply_config(conf_fire, conf_pose, cooldown, sleep_frames,
-                 alert_fire, alert_smoke, alert_cig, alert_no_mask, alert_sleep, alert_uniform):
+def apply_config(conf_fire, conf_cig, conf_mask, conf_pose, conf_uniform,
+                 frames_fire, frames_cig, frames_mask, frames_sleep, frames_uniform,
+                 log_cooldown,
+                 alert_fire, alert_smoke, alert_cig, alert_no_mask, alert_sleep, alert_uniform,
+                 display_fire, display_smoke, display_cig, display_no_mask, display_sleep, display_sleep_pose,
+                 display_uniform, display_uniform_helmet, display_uniform_human):
     """Apply configuration from admin page"""
     engine.set_config("conf_fire", conf_fire)
+    engine.set_config("conf_cig", conf_cig)
+    engine.set_config("conf_mask", conf_mask)
     engine.set_config("conf_pose", conf_pose)
-    engine.set_config("log_cooldown", cooldown)
-    engine.set_config("sleep_frames", int(sleep_frames))
+    engine.set_config("conf_uniform", conf_uniform)
+    engine.set_config("frames_fire", int(frames_fire))
+    engine.set_config("frames_cig", int(frames_cig))
+    engine.set_config("frames_mask", int(frames_mask))
+    engine.set_config("frames_sleep", int(frames_sleep))
+    engine.set_config("frames_uniform", int(frames_uniform))
+    engine.set_config("log_cooldown", log_cooldown)
     engine.set_alert("fire", alert_fire)
     engine.set_alert("smoke", alert_smoke)
     engine.set_alert("cig", alert_cig)
     engine.set_alert("no_mask", alert_no_mask)
     engine.set_alert("sleep", alert_sleep)
     engine.set_alert("uniform", alert_uniform)
+    engine.set_display("fire", display_fire)
+    engine.set_display("smoke", display_smoke)
+    engine.set_display("cig", display_cig)
+    engine.set_display("no_mask", display_no_mask)
+    engine.set_display("sleep", display_sleep)
+    engine.set_display("sleep_pose", display_sleep_pose)
+    engine.set_display("uniform", display_uniform)
+    engine.set_display("uniform_helmet", display_uniform_helmet)
+    engine.set_display("uniform_human", display_uniform_human)
     return "✅ 配置已应用"
 
 
@@ -846,21 +883,45 @@ with gr.Blocks(title="AI 视频监控", css=CUSTOM_CSS, theme=gr.themes.Soft()) 
                 # Sub-tab 3: Model Config
                 with gr.TabItem("模型配置"):
                     with gr.Row():
-                        with gr.Column(scale=1):
+                        with gr.Column():
+                            gr.Markdown("**▸ 阈值设定**")
                             conf_fire = gr.Slider(0.1, 0.9, value=0.25, step=0.05, label="火焰/烟雾检测阈值")
+                            conf_cig = gr.Slider(0.1, 0.9, value=0.25, step=0.05, label="抽烟检测阈值")
+                            conf_mask = gr.Slider(0.1, 0.9, value=0.25, step=0.05, label="口罩检测阈值")
                             conf_pose = gr.Slider(0.1, 0.9, value=0.25, step=0.05, label="睡岗检测阈值")
-                            sleep_frames = gr.Slider(30, 300, value=150, step=10, label="睡岗判定帧数")
-                            log_cooldown = gr.Slider(1.0, 15.0, value=5.0, step=0.5, label="日志冷却时间(秒)")
-                        with gr.Column(scale=1):
-                            gr.Markdown("**告警开关**")
-                            alert_fire = gr.Checkbox(label="🔥 火焰告警", value=True)
-                            alert_smoke = gr.Checkbox(label="🌫️ 烟雾告警", value=True)
-                            alert_cig = gr.Checkbox(label="🚬 抽烟告警", value=True)
-                            alert_no_mask = gr.Checkbox(label="😷 未戴口罩告警", value=True)
-                            alert_sleep = gr.Checkbox(label="💤 睡岗告警", value=True)
-                            alert_uniform = gr.Checkbox(label="🦺 未穿工服告警", value=True)
+                            conf_uniform = gr.Slider(0.1, 0.9, value=0.25, step=0.05, label="工服检测阈值")
+
+                            gr.Markdown("**▸ 告警开关**")
+                            alert_fire = gr.Checkbox(label="火焰", value=True)
+                            alert_smoke = gr.Checkbox(label="烟雾", value=True)
+                            alert_cig = gr.Checkbox(label="抽烟", value=True)
+                            alert_no_mask = gr.Checkbox(label="未戴口罩", value=True)
+                            alert_sleep = gr.Checkbox(label="睡岗", value=True)
+                            alert_uniform = gr.Checkbox(label="工服", value=True)
+
+                        with gr.Column():
+                            gr.Markdown("**▸ 判定帧数**")
+                            frames_fire = gr.Slider(1, 30, value=3, step=1, label="火焰/烟雾判定帧数")
+                            frames_cig = gr.Slider(1, 30, value=3, step=1, label="抽烟判定帧数")
+                            frames_mask = gr.Slider(1, 30, value=3, step=1, label="口罩判定帧数")
+                            frames_sleep = gr.Slider(30, 300, value=150, step=10, label="睡岗判定帧数")
+                            frames_uniform = gr.Slider(1, 30, value=3, step=1, label="工服判定帧数")
+
+                            gr.Markdown("**▸ 检测框显示**")
+                            display_fire = gr.Checkbox(label="火焰", value=True)
+                            display_smoke = gr.Checkbox(label="烟雾", value=True)
+                            display_cig = gr.Checkbox(label="抽烟", value=True)
+                            display_no_mask = gr.Checkbox(label="未戴口罩", value=True)
+                            with gr.Row():
+                                display_sleep = gr.Checkbox(label="睡岗", value=True)
+                                display_sleep_pose = gr.Checkbox(label="姿态", value=False)
+                            with gr.Row():
+                                display_uniform = gr.Checkbox(label="工服", value=True)
+                                display_uniform_helmet = gr.Checkbox(label="头盔", value=False)
+                                display_uniform_human = gr.Checkbox(label="人体", value=False)
                     apply_config_btn = gr.Button("✅ 应用配置", variant="primary")
                     config_status = gr.Textbox(label="", interactive=False, visible=False)
+                    log_cooldown = gr.Slider(1.0, 15.0, value=5.0, step=0.5, label="日志冷却时间(秒)", visible=False)
 
             # ======================
             # Event Bindings
@@ -888,8 +949,12 @@ with gr.Blocks(title="AI 视频监控", css=CUSTOM_CSS, theme=gr.themes.Soft()) 
             # Config events
             apply_config_btn.click(
                 apply_config,
-                inputs=[conf_fire, conf_pose, log_cooldown, sleep_frames,
-                        alert_fire, alert_smoke, alert_cig, alert_no_mask, alert_sleep, alert_uniform],
+                inputs=[conf_fire, conf_cig, conf_mask, conf_pose, conf_uniform,
+                        frames_fire, frames_cig, frames_mask, frames_sleep, frames_uniform,
+                        log_cooldown,
+                        alert_fire, alert_smoke, alert_cig, alert_no_mask, alert_sleep, alert_uniform,
+                        display_fire, display_smoke, display_cig, display_no_mask, display_sleep, display_sleep_pose,
+                        display_uniform, display_uniform_helmet, display_uniform_human],
                 outputs=[config_status],
             )
             export_btn.click(export_logs, outputs=[export_status])

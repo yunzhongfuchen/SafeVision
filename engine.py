@@ -18,11 +18,6 @@ import sleep_detect
 # Model Loading
 # ======================
 
-human_model = pipeline(
-    Tasks.domain_specific_object_detection,
-    model='iic/cv_tinynas_human-detection_damoyolo',
-    trust_remote_code=True
-)
 
 cigarette_model = pipeline(
     Tasks.domain_specific_object_detection,
@@ -39,12 +34,34 @@ mask_model = pipeline(
 fire_model = YOLO("fire.pt")
 sleep_pose_model = YOLO("yolov8s-pose.pt")
 
-# Load PPE detection model from HuggingFace
-print("Downloading uniform model from HuggingFace...")
-_uniform_model_path = hf_hub_download(
-    repo_id="melihuzunoglu/ppe-detection",
-    filename="best.pt"
-)
+# Load PPE detection model from HuggingFace (with offline fallback)
+import os as _os
+_uniform_model_repo = "melihuzunoglu/ppe-detection"
+_uniform_model_filename = "best.pt"
+
+# Try to use cached model first (avoid network call if already downloaded)
+_uniform_cached_path = None
+_cache_base = _os.path.expanduser("~/.cache/huggingface/hub")
+if _os.path.isdir(_cache_base):
+    import glob as _glob
+    _snapshot_dirs = _glob.glob(
+        _os.path.join(_cache_base, "models--melihuzunoglu--ppe-detection", "snapshots", "*")
+    )
+    if _snapshot_dirs:
+        _snapshot_dirs.sort(key=_os.path.getmtime, reverse=True)
+        _candidate = _os.path.join(_snapshot_dirs[0], _uniform_model_filename)
+        if _os.path.isfile(_candidate):
+            _uniform_cached_path = _candidate
+
+if _uniform_cached_path:
+    print(f"Using cached uniform model: {_uniform_cached_path}")
+    _uniform_model_path = _uniform_cached_path
+else:
+    print("Downloading uniform model from HuggingFace...")
+    _uniform_model_path = hf_hub_download(
+        repo_id=_uniform_model_repo,
+        filename=_uniform_model_filename
+    )
 uniform_model = YOLO(_uniform_model_path)
 print(f"Uniform model loaded, classes: {uniform_model.names}")
 
@@ -64,7 +81,6 @@ running = False
 video_finished = False
 
 # Detection results
-result_human = {}
 result_cig = {}
 result_mask = {}
 result_no_mask = {}
@@ -149,6 +165,7 @@ def get_system_status():
         "uptime": f"{hrs:02d}:{mins:02d}:{secs:02d}" if _start_time > 0 else "00:00:00",
         "video_fps": round(video_fps, 1),
         "threads": thread_info,
+        "stats": get_stats(),
     }
 
 
@@ -157,11 +174,20 @@ def get_system_status():
 # ======================
 
 _config = {
+    # Thresholds
     "conf_fire": 0.25,
+    "conf_cig": 0.25,
+    "conf_mask": 0.25,
     "conf_pose": 0.25,
     "conf_uniform": 0.25,
-    "log_cooldown": 5.0,
-    "sleep_frames": 150,
+
+    # Frame counts for consecutive detection
+    "frames_fire": 3,
+    "frames_cig": 3,
+    "frames_mask": 3,
+    "frames_sleep": 150,
+    "frames_uniform": 3,
+
     "alerts": {
         "fire": True,
         "smoke": True,
@@ -170,6 +196,18 @@ _config = {
         "sleep": True,
         "uniform": True,
     },
+    "display": {
+        "fire": True,
+        "smoke": True,
+        "cig": True,
+        "no_mask": True,
+        "sleep": True,
+        "sleep_pose": False,
+        "uniform": True,
+        "uniform_helmet": False,
+        "uniform_human": False,
+    },
+    "log_cooldown": 5.0,
 }
 _config_lock = threading.Lock()
 
@@ -199,6 +237,17 @@ def get_alerts():
 def get_config_value(key):
     with _config_lock:
         return _config.get(key)
+
+
+def set_display(event_type, enabled):
+    with _config_lock:
+        if event_type in _config["display"]:
+            _config["display"][event_type] = enabled
+
+
+def get_display():
+    with _config_lock:
+        return dict(_config["display"])
 
 
 # ======================
@@ -263,13 +312,17 @@ def add_log_entry(event_type, score, box=None, snapshot=None):
         cooldown = _config["log_cooldown"]
         alert_enabled = _config["alerts"].get(event_type, True)
     if not alert_enabled:
+        print(f"[add_log_entry] {event_type}: alert disabled")
         return
     with log_lock:
         if event_type in last_log_time:
-            if now - last_log_time[event_type] < cooldown:
+            elapsed = now - last_log_time[event_type]
+            if elapsed < cooldown:
+                print(f"[add_log_entry] {event_type}: cooldown {elapsed:.1f}s < {cooldown}s")
                 return
         last_log_time[event_type] = now
         log_entries.append(LogEntry(event_type, score, box, snapshot))
+        print(f"[add_log_entry] {event_type}: logged (total={len(log_entries)})")
 
 
 def get_log_entries(limit=50):
@@ -278,8 +331,12 @@ def get_log_entries(limit=50):
 
 
 def clear_logs():
+    """Clear all log entries and reset cooldown timers."""
+    global last_log_time
     with log_lock:
         log_entries.clear()
+        last_log_time = {}
+    print("[clear_logs] logs cleared")
 
 
 def export_logs_csv():
@@ -323,41 +380,44 @@ def video_stream():
 # Detection Threads
 # ======================
 
-def detect_human():
-    global result_human
-    while running:
-        if latest_frame is None:
-            time.sleep(0.05)
-            continue
-        frame = latest_frame.copy()
-        try:
-            result_human = human_model(frame)
-        except Exception:
-            pass
-        time.sleep(0.01)
-
-
 def detect_cigarette():
     global result_cig
+    tick, get_fps = _track_thread_fps("detect_cig")
+    consec_count = 0
     while running:
         if latest_frame is None:
             time.sleep(0.05)
             continue
         frame = latest_frame.copy()
+        boxes, scores = [], []
         try:
             r = cigarette_model(frame)
-            result_cig = r
+            conf_thresh = get_config_value("conf_cig") or 0.25
+            frames_req = get_config_value("frames_cig") or 3
             if 'boxes' in r and len(r.get('boxes', [])) > 0:
                 for box, score in zip(r['boxes'], r.get('scores', [])):
-                    snap = _capture_snapshot(frame, "cig", score, box)
-                    add_log_entry("cig", score, box, snap)
-        except Exception:
-            pass
+                    if score >= conf_thresh:
+                        boxes.append(list(box))
+                        scores.append(score)
+        except Exception as e:
+            print(f"[detect_cigarette] error: {e}")
+        result_cig = {"boxes": boxes, "scores": scores}
+        if boxes:
+            consec_count += 1
+        else:
+            consec_count = 0
+        if consec_count >= frames_req:
+            for box, score in zip(boxes, scores):
+                snap = _capture_snapshot(frame, "cig", score, box)
+                add_log_entry("cig", score, box, snap)
+        tick()
         time.sleep(0.01)
 
 
 def detect_mask():
     global result_mask, result_no_mask
+    tick, get_fps = _track_thread_fps("detect_mask")
+    consec_count = 0
     while running:
         if latest_frame is None:
             time.sleep(0.05)
@@ -365,6 +425,8 @@ def detect_mask():
         frame = latest_frame.copy()
         try:
             r = mask_model(frame)
+            conf_thresh = get_config_value("conf_mask") or 0.25
+            frames_req = get_config_value("frames_mask") or 3
             mask_boxes, mask_scores = [], []
             no_mask_boxes, no_mask_scores = [], []
             if 'boxes' in r and r['boxes'] is not None:
@@ -372,25 +434,34 @@ def detect_mask():
                     score = r['scores'][i] if 'scores' in r else 0.5
                     label = str(r['labels'][i]) if 'labels' in r else 'facemask'
                     if label in ('facemask', '1'):
-                        mask_boxes.append(list(box))
-                        mask_scores.append(score)
+                        if score >= conf_thresh:
+                            mask_boxes.append(list(box))
+                            mask_scores.append(score)
                     elif label in ('no facemask', '2'):
-                        no_mask_boxes.append(list(box))
-                        no_mask_scores.append(score)
+                        if score >= conf_thresh:
+                            no_mask_boxes.append(list(box))
+                            no_mask_scores.append(score)
             result_mask = {"boxes": mask_boxes, "scores": mask_scores}
             result_no_mask = {"boxes": no_mask_boxes, "scores": no_mask_scores}
-            if result_no_mask['boxes']:
-                for box, score in zip(result_no_mask['boxes'], result_no_mask['scores']):
+            if no_mask_boxes:
+                consec_count += 1
+            else:
+                consec_count = 0
+            if consec_count >= frames_req:
+                for box, score in zip(no_mask_boxes, no_mask_scores):
                     snap = _capture_snapshot(frame, "no_mask", score, box)
                     add_log_entry("no_mask", score, box, snap)
         except Exception:
-            pass
+            consec_count = 0
+        tick()
         time.sleep(0.01)
 
 
 def detect_fire():
     global result_fire, result_smoke
     tick, get_fps = _track_thread_fps("detect_fire")
+    fire_count = 0
+    smoke_count = 0
     while running:
         if latest_frame is None:
             time.sleep(0.05)
@@ -398,6 +469,7 @@ def detect_fire():
         frame = latest_frame.copy()
         try:
             conf = get_config_value("conf_fire") or 0.25
+            frames_req = get_config_value("frames_fire") or 3
             r = fire_model.predict(frame, conf=conf, verbose=False)
             fire_boxes, fire_scores = [], []
             smoke_boxes, smoke_scores = [], []
@@ -414,14 +486,25 @@ def detect_fire():
                         smoke_scores.append(score)
             result_fire = {"boxes": fire_boxes, "scores": fire_scores}
             result_smoke = {"boxes": smoke_boxes, "scores": smoke_scores}
-            for box, score in zip(fire_boxes, fire_scores):
-                snap = _capture_snapshot(frame, "fire", score, box)
-                add_log_entry("fire", score, box, snap)
-            for box, score in zip(smoke_boxes, smoke_scores):
-                snap = _capture_snapshot(frame, "smoke", score, box)
-                add_log_entry("smoke", score, box, snap)
+            if fire_boxes:
+                fire_count += 1
+            else:
+                fire_count = 0
+            if smoke_boxes:
+                smoke_count += 1
+            else:
+                smoke_count = 0
+            if fire_count >= frames_req:
+                for box, score in zip(fire_boxes, fire_scores):
+                    snap = _capture_snapshot(frame, "fire", score, box)
+                    add_log_entry("fire", score, box, snap)
+            if smoke_count >= frames_req:
+                for box, score in zip(smoke_boxes, smoke_scores):
+                    snap = _capture_snapshot(frame, "smoke", score, box)
+                    add_log_entry("smoke", score, box, snap)
         except Exception:
-            pass
+            fire_count = 0
+            smoke_count = 0
         tick()
         time.sleep(0.01)
 
@@ -430,7 +513,7 @@ def detect_uniform():
     """工服检测线程 — 检测未穿反光背心的人员。"""
     global result_uniform
     tick, get_fps = _track_thread_fps("detect_uniform")
-    conf_val = get_config_value("conf_uniform") or 0.25
+    consec_count = 0
 
     while running:
         if latest_frame is None:
@@ -438,9 +521,12 @@ def detect_uniform():
             continue
         frame = latest_frame.copy()
         try:
+            conf_val = get_config_value("conf_uniform") or 0.25
+            frames_req = get_config_value("frames_uniform") or 3
             r = uniform_model(frame, conf=conf_val, verbose=False)
             vest_boxes, vest_scores = [], []
             human_boxes, human_scores = [], []
+            helmet_boxes, helmet_scores = [], []
             all_boxes, all_scores, all_classes = [], [], []
             if r and r[0].boxes is not None:
                 for b in r[0].boxes:
@@ -454,6 +540,9 @@ def detect_uniform():
                     elif cls_name == "human":
                         human_boxes.append([x1, y1, x2, y2])
                         human_scores.append(score)
+                    elif cls_name in ("helmet", "no-helmet"):
+                        helmet_boxes.append([x1, y1, x2, y2])
+                        helmet_scores.append(score)
                     # Collect all for rendering
                     all_boxes.append([x1, y1, x2, y2])
                     all_scores.append(score)
@@ -466,17 +555,23 @@ def detect_uniform():
                 "vest_scores": vest_scores,
                 "human_boxes": human_boxes,
                 "human_scores": human_scores,
+                "helmet_boxes": helmet_boxes,
+                "helmet_scores": helmet_scores,
             }
             # Log when human count exceeds vest count (missing vest)
             missing = max(0, len(human_boxes) - len(vest_boxes))
             if missing > 0:
+                consec_count += 1
+            else:
+                consec_count = 0
+            if consec_count >= frames_req:
                 for i, (box, score) in enumerate(zip(human_boxes, human_scores)):
                     snap = _capture_snapshot(frame, "uniform", score, box)
                     add_log_entry("uniform", score, box, snap)
                     if i >= missing - 1:
                         break
         except Exception:
-            pass
+            consec_count = 0
         tick()
         time.sleep(0.01)
 
@@ -489,8 +584,6 @@ def detect_sleep():
     """睡岗检测线程 - 基于 YOLOv8-pose 全帧推理。"""
     global sleep_tracker, result_sleep
     tick, get_fps = _track_thread_fps("detect_sleep")
-    sleep_frames_threshold = get_config_value("sleep_frames") or 150
-    conf_pose_val = get_config_value("conf_pose") or 0.25
     sleep_tracker = {}
     prev_boxes = {}
     _pid_counter = 0
@@ -501,7 +594,8 @@ def detect_sleep():
             continue
         frame = latest_frame.copy()
 
-        # 全帧 pose 推理（YOLOv8-pose 自带人体检测）
+        sleep_frames_threshold = get_config_value("frames_sleep") or 150
+        conf_pose_val = get_config_value("conf_pose") or 0.25
         detections = sleep_detect.process_frame(sleep_pose_model, frame, conf=conf_pose_val)
 
         # 跨帧 ID 匹配（简单 IoU）
@@ -552,6 +646,7 @@ def detect_sleep():
             if pid not in sleep_tracker:
                 sleep_tracker[pid] = {"sleep_count": 0, "sleeping": False}
             tracker = sleep_tracker[pid]
+            was_sleeping = tracker["sleeping"]
             if det['sleeping']:
                 tracker["sleep_count"] += 1
             else:
@@ -570,8 +665,12 @@ def detect_sleep():
                 "keypoints": det.get('keypoints'),
                 "_info": det.get('_info', {}),
             })
-            # Log on instantaneous detection (same signal shown on display)
-            if det['sleeping']:
+            # Periodic debug print every 30 frames
+            if tracker["sleep_count"] > 0 and tracker["sleep_count"] % 30 == 0 and not tracker["sleeping"]:
+                print(f"[detect_sleep] pid={pid}: count={tracker['sleep_count']}/{sleep_frames_threshold} (is_sleeping={det['sleeping']})")
+            # Log only when transitioning to sleeping state (not every frame)
+            if tracker["sleeping"] and not was_sleeping:
+                print(f"[detect_sleep] pid={pid}: threshold met (count={tracker['sleep_count']}/{sleep_frames_threshold}), logging...")
                 snap = _capture_snapshot(frame, "sleep", det['score'], det['box'])
                 add_log_entry("sleep", det['score'], det['box'], snap)
 
@@ -647,98 +746,124 @@ def _render_loop():
             time.sleep(0.01)
             continue
         frame = latest_frame.copy()
+        display = get_display()
+
         r_cig = dict(result_cig)
         r_mask = dict(result_mask)
         r_nmask = dict(result_no_mask)
         r_fire = dict(result_fire)
         r_smoke = dict(result_smoke)
 
-        for box, score in zip(r_cig.get('boxes', []), r_cig.get('scores', [])):
-            x1, y1, x2, y2 = map(int, box)
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
-            cv2.putText(frame, f'cig {score:.2f}', (x1, y1 - 5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+        if display.get("cig", True):
+            for box, score in zip(r_cig.get('boxes', []), r_cig.get('scores', [])):
+                x1, y1, x2, y2 = map(int, box)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                cv2.putText(frame, f'cig {score:.2f}', (x1, y1 - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
-        for box, score in zip(r_mask.get('boxes', []), r_mask.get('scores', [])):
-            x1, y1, x2, y2 = map(int, box)
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(frame, f'mask {score:.2f}', (x1, y1 - 5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        if display.get("no_mask", True):
+            for box, score in zip(r_mask.get('boxes', []), r_mask.get('scores', [])):
+                x1, y1, x2, y2 = map(int, box)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.putText(frame, f'mask {score:.2f}', (x1, y1 - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
-        for box, score in zip(r_nmask.get('boxes', []), r_nmask.get('scores', [])):
-            x1, y1, x2, y2 = map(int, box)
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 165, 255), 2)
-            cv2.putText(frame, f'no mask {score:.2f}', (x1, y1 - 5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+            for box, score in zip(r_nmask.get('boxes', []), r_nmask.get('scores', [])):
+                x1, y1, x2, y2 = map(int, box)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 165, 255), 2)
+                cv2.putText(frame, f'no mask {score:.2f}', (x1, y1 - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
 
-        for box, score in zip(r_fire.get('boxes', []), r_fire.get('scores', [])):
-            x1, y1, x2, y2 = box
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
-            cv2.putText(frame, f'fire {score:.2f}', (x1, y1 - 5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+        if display.get("fire", True):
+            for box, score in zip(r_fire.get('boxes', []), r_fire.get('scores', [])):
+                x1, y1, x2, y2 = box
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                cv2.putText(frame, f'fire {score:.2f}', (x1, y1 - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
-        for box, score in zip(r_smoke.get('boxes', []), r_smoke.get('scores', [])):
-            x1, y1, x2, y2 = box
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
-            cv2.putText(frame, f'smoke {score:.2f}', (x1, y1 - 5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+        if display.get("smoke", True):
+            for box, score in zip(r_smoke.get('boxes', []), r_smoke.get('scores', [])):
+                x1, y1, x2, y2 = box
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
+                cv2.putText(frame, f'smoke {score:.2f}', (x1, y1 - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
 
-        # Uniform/vest detection boxes
-        r_uniform = dict(result_uniform)
-        for box, score, cls in zip(
-            r_uniform.get('boxes', []),
-            r_uniform.get('scores', []),
-            r_uniform.get('classes', []),
-        ):
-            x1, y1, x2, y2 = [int(v) for v in box]
-            color = (0, 255, 0) if cls == "vest" else (255, 255, 0)
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-            cv2.putText(frame, f'{cls} {score:.2f}', (x1, y1 - 5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+        # Uniform/vest detection boxes — vest (always under "uniform" toggle)
+        if display.get("uniform", True):
+            r_uniform = dict(result_uniform)
+            for box, score in zip(r_uniform.get('vest_boxes', []), r_uniform.get('vest_scores', [])):
+                x1, y1, x2, y2 = [int(v) for v in box]
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.putText(frame, f'vest {score:.2f}', (x1, y1 - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
-        # Sleep detection boxes + skeleton
-        for entry in result_sleep:
-            box = entry['box']
-            x1, y1, x2, y2 = [int(v) for v in box]
-            info = entry.get('_info', {})
-            kp = entry.get('keypoints')
-            posture_cn = POSTURE_LABELS.get(info.get('posture', ''), '')
+        # Helmet boxes
+        if display.get("uniform_helmet", False):
+            r_uniform = dict(result_uniform)
+            for box, score in zip(r_uniform.get('helmet_boxes', []), r_uniform.get('helmet_scores', [])):
+                x1, y1, x2, y2 = [int(v) for v in box]
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                cv2.putText(frame, f'helmet {score:.2f}', (x1, y1 - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
 
-            if info.get('is_sleeping'):
-                box_color = (0, 255, 255)
-                status_text = "[ 睡眠中 ]  " + posture_cn
-                status_color = (0, 255, 255)
-            else:
-                box_color = (0, 0, 255)
-                status_text = "[ 未睡眠 ]  " + posture_cn
-                status_color = (100, 100, 255)
+        # Human boxes
+        if display.get("uniform_human", False):
+            r_uniform = dict(result_uniform)
+            for box, score in zip(r_uniform.get('human_boxes', []), r_uniform.get('human_scores', [])):
+                x1, y1, x2, y2 = [int(v) for v in box]
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 0), 2)
+                cv2.putText(frame, f'human {score:.2f}', (x1, y1 - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
 
-            cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 3)
+        # Sleep detection: box always, skeleton/pose only when sleep_pose enabled
+        if display.get("sleep", True):
+            for entry in result_sleep:
+                box = entry['box']
+                x1, y1, x2, y2 = [int(v) for v in box]
+                info = entry.get('_info', {})
 
-            # 状态行
-            _, h1 = draw_chinese_text(frame, status_text, x1, max(0, y1 - 60),
-                                       color=status_color, font_size=22,
-                                       bg_color=(0, 0, 0))
+                if info.get('is_sleeping'):
+                    box_color = (0, 255, 255)
+                else:
+                    box_color = (0, 0, 255)
 
-            # 置信度行
-            conf_text = f"睡眠: {info.get('sleep_confidence', 0):.0%}  |  睡姿: {info.get('posture_confidence', 0):.0%}"
-            draw_chinese_text(frame, conf_text, x1, max(0, y1 - 60) + h1 + 2,
-                              color=(220, 220, 220), font_size=18,
-                              bg_color=(0, 0, 0))
+                cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 3)
 
-            # 骨架
-            if kp is not None and len(kp) >= 17:
-                for a, b in SKELETON:
-                    if float(kp[a, 2]) > KPT_CONF_THRESHOLD and float(kp[b, 2]) > KPT_CONF_THRESHOLD:
-                        pt1 = (int(kp[a, 0]), int(kp[a, 1]))
-                        pt2 = (int(kp[b, 0]), int(kp[b, 1]))
-                        cv2.line(frame, pt1, pt2, (0, 255, 0), 3)
-                        cv2.line(frame, pt1, pt2, (0, 180, 0), 1)
-                for i in range(len(kp)):
-                    if float(kp[i, 2]) > KPT_CONF_THRESHOLD:
-                        x, y = int(kp[i, 0]), int(kp[i, 1])
-                        cv2.circle(frame, (x, y), 6, KPT_COLORS[i], -1)
-                        cv2.circle(frame, (x, y), 8, (255, 255, 255), 1)
+                if display.get("sleep_pose", False):
+                    kp = entry.get('keypoints')
+                    posture_cn = POSTURE_LABELS.get(info.get('posture', ''), '')
+
+                    if info.get('is_sleeping'):
+                        status_text = "[ 睡眠中 ]  " + posture_cn
+                        status_color = (0, 255, 255)
+                    else:
+                        status_text = "[ 未睡眠 ]  " + posture_cn
+                        status_color = (100, 100, 255)
+
+                    # 状态行
+                    _, h1 = draw_chinese_text(frame, status_text, x1, max(0, y1 - 60),
+                                               color=status_color, font_size=22,
+                                               bg_color=(0, 0, 0))
+
+                    # 置信度行
+                    conf_text = f"睡眠: {info.get('sleep_confidence', 0):.0%}  |  睡姿: {info.get('posture_confidence', 0):.0%}"
+                    draw_chinese_text(frame, conf_text, x1, max(0, y1 - 60) + h1 + 2,
+                                      color=(220, 220, 220), font_size=18,
+                                      bg_color=(0, 0, 0))
+
+                    # 骨架
+                    if kp is not None and len(kp) >= 17:
+                        for a, b in SKELETON:
+                            if float(kp[a, 2]) > KPT_CONF_THRESHOLD and float(kp[b, 2]) > KPT_CONF_THRESHOLD:
+                                pt1 = (int(kp[a, 0]), int(kp[a, 1]))
+                                pt2 = (int(kp[b, 0]), int(kp[b, 1]))
+                                cv2.line(frame, pt1, pt2, (0, 255, 0), 3)
+                                cv2.line(frame, pt1, pt2, (0, 180, 0), 1)
+                        for i in range(len(kp)):
+                            if float(kp[i, 2]) > KPT_CONF_THRESHOLD:
+                                x, y = int(kp[i, 0]), int(kp[i, 1])
+                                cv2.circle(frame, (x, y), 6, KPT_COLORS[i], -1)
+                                cv2.circle(frame, (x, y), 8, (255, 255, 255), 1)
 
         annotated_frame = frame
         try:
@@ -758,7 +883,7 @@ def _render_loop():
 def start_detection(source_type, source_path=None):
     global cap, running, video_finished, current_source, current_source_path
     global frame_interval, video_fps, _start_time
-    global sleep_tracker, result_human, result_cig, result_mask
+    global sleep_tracker, result_cig, result_mask
     global result_no_mask, result_fire, result_smoke, result_sleep, annotated_frame, annotated_jpeg
     global latest_frame
 
@@ -794,7 +919,6 @@ def start_detection(source_type, source_path=None):
     annotated_frame = None
     annotated_jpeg = None
     sleep_tracker.clear()
-    result_human.clear()
     result_cig.clear()
     result_mask.clear()
     result_no_mask.clear()
@@ -814,7 +938,6 @@ def start_detection(source_type, source_path=None):
 
     thread_fns = [
         ("video_stream", video_stream),
-        ("detect_human", detect_human),
         ("detect_cig", detect_cigarette),
         ("detect_mask", detect_mask),
         ("detect_fire", detect_fire),
