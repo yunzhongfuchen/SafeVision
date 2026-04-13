@@ -182,11 +182,11 @@ _config = {
     "conf_uniform": 0.25,
 
     # Frame counts for consecutive detection
-    "frames_fire": 3,
-    "frames_cig": 3,
-    "frames_mask": 3,
+    "frames_fire": 5,
+    "frames_cig": 5,
+    "frames_mask": 5,
     "frames_sleep": 150,
-    "frames_uniform": 3,
+    "frames_uniform": 5,
 
     "alerts": {
         "fire": True,
