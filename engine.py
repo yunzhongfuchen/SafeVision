@@ -68,48 +68,34 @@ print(f"Uniform model loaded, classes: {uniform_model.names}")
 
 
 # ======================
-# VLM Model (lazy loaded)
-# ======================
+# VLM via Ollama API (no local model loading needed)
 
-_vlm_model = None
-_vlm_processor = None
+VLM_OLLAMA_URL = "http://localhost:11434"
+VLM_MODEL_NAME = "qwen3.5:2b"
+_vlm_model_loaded = False
 _vlm_load_lock = threading.Lock()
 
 
 def _load_vlm_model():
-    """延迟加载 Qwen3-VL-2B-Instruct，首次检测时才加载。"""
-    global _vlm_model, _vlm_processor
+    """测试 Ollama 连接并确认模型可用。"""
+    global _vlm_model_loaded
     with _vlm_load_lock:
-        if _vlm_model is not None:
+        if _vlm_model_loaded:
             return
-        from transformers import AutoModelForVision2Seq, AutoProcessor
-        import torch
-
-        model_name = "Qwen/Qwen3-VL-2B-Instruct"
-
-        # 优先使用本地缓存
-        cache_base = _os.path.expanduser("~/.cache/huggingface/hub")
-        cached = False
-        if _os.path.isdir(cache_base):
-            snapshot_dirs = _glob.glob(
-                _os.path.join(cache_base, "models--Qwen--Qwen3-VL-2B-Instruct", "snapshots", "*")
-            )
-            if snapshot_dirs:
-                cached = True
-
-        if cached:
-            print("[VLM] Loading from cache...")
-        else:
-            print("[VLM] Downloading model (first run, may take a while)...")
-            hf_hub_download(repo_id=model_name, filename="config.json")
-
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        dtype = torch.float16 if device == "cuda" else torch.float32
-        _vlm_processor = AutoProcessor.from_pretrained(model_name)
-        _vlm_model = AutoModelForVision2Seq.from_pretrained(
-            model_name, torch_dtype=dtype, device_map="auto"
-        )
-        print(f"[VLM] Model loaded on {device}, dtype={dtype}")
+        import urllib.request
+        try:
+            req = urllib.request.Request(f"{VLM_OLLAMA_URL}/api/tags")
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+                models = [m.get("name", "") for m in data.get("models", [])]
+                if VLM_MODEL_NAME not in models:
+                    raise ConnectionError(
+                        f"模型 '{VLM_MODEL_NAME}' 不在 Ollama 列表中，请先运行: ollama pull {VLM_MODEL_NAME}"
+                    )
+            _vlm_model_loaded = True
+            print(f"[VLM] Connected to Ollama, model: {VLM_MODEL_NAME}")
+        except Exception as e:
+            raise ConnectionError(f"Ollama 连接失败: {e}")
 
 
 # ======================
@@ -746,39 +732,32 @@ def detect_vlm():
             tick()
 
             try:
-                # BGR → RGB → PIL
-                frame_rgb = cv2.cvtColor(frame_copy, cv2.COLOR_BGR2RGB)
-                pil_image = Image.fromarray(frame_rgb)
+                # 编码为 JPEG base64
+                _, jpeg = cv2.imencode(".jpg", frame_copy, [cv2.IMWRITE_JPEG_QUALITY, 60])
+                img_b64 = base64.b64encode(jpeg.tobytes()).decode()
+                snap_b64 = "data:image/jpeg;base64," + img_b64
 
-                messages = [
-                    {"role": "user", "content": [
-                        {"type": "image", "image": pil_image},
-                        {"type": "text", "text": VLM_PROMPT},
-                    ]}
-                ]
-                text = _vlm_processor.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=True
-                )
-                inputs = _vlm_processor(
-                    text=[text], images=[pil_image],
-                    padding=True, return_tensors="pt"
-                )
-                inputs = inputs.to(_vlm_model.device)
+                # 调用 Ollama API
+                payload = json.dumps({
+                    "model": VLM_MODEL_NAME,
+                    "messages": [
+                        {"role": "user", "content": VLM_PROMPT, "images": [img_b64]}
+                    ],
+                    "stream": False,
+                    "options": {"temperature": 0}
+                }).encode("utf-8")
 
-                outputs = _vlm_model.generate(
-                    **inputs, max_new_tokens=512, do_sample=False
+                req = urllib.request.Request(
+                    f"{VLM_OLLAMA_URL}/api/chat",
+                    data=payload,
+                    headers={"Content-Type": "application/json"}
                 )
-                response_text = _vlm_processor.decode(
-                    outputs[0][inputs["input_ids"].shape[1]:],
-                    skip_special_tokens=True
-                )
+                with urllib.request.urlopen(req, timeout=120) as resp:
+                    result = json.loads(resp.read().decode())
+                response_text = result.get("message", {}).get("content", "")
 
                 # 解析响应
                 hazards, confidences, description = _parse_vlm_response(response_text)
-
-                # 截取快照
-                _, jpeg = cv2.imencode(".jpg", frame_copy, [cv2.IMWRITE_JPEG_QUALITY, 60])
-                snap_b64 = "data:image/jpeg;base64," + base64.b64encode(jpeg.tobytes()).decode()
 
                 # 存储结果
                 with _vlm_lock:
