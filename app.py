@@ -222,6 +222,9 @@ def api_mute_fire():
 
 def start_flask():
     """Run Flask in background thread"""
+    import logging
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.ERROR)
     flask_app.run(host="0.0.0.0", port=5000, threaded=True, use_reloader=False)
 
 
