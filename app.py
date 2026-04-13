@@ -771,10 +771,7 @@ def get_config_values():
         display.get("cig", True),
         display.get("no_mask", True),
         display.get("sleep", True),
-        display.get("sleep_pose", False),
         display.get("uniform", True),
-        display.get("uniform_helmet", False),
-        display.get("uniform_human", False),
     )
 
 
@@ -782,8 +779,7 @@ def apply_config(conf_fire, conf_cig, conf_mask, conf_pose, conf_uniform,
                  frames_fire, frames_cig, frames_mask, frames_sleep, frames_uniform,
                  log_cooldown,
                  alert_fire, alert_smoke, alert_cig, alert_no_mask, alert_sleep, alert_uniform,
-                 display_fire, display_smoke, display_cig, display_no_mask, display_sleep, display_sleep_pose,
-                 display_uniform, display_uniform_helmet, display_uniform_human):
+                 display_fire, display_smoke, display_cig, display_no_mask, display_sleep, display_uniform):
     """Apply configuration from admin page"""
     engine.set_config("conf_fire", conf_fire)
     engine.set_config("conf_cig", conf_cig)
@@ -807,10 +803,7 @@ def apply_config(conf_fire, conf_cig, conf_mask, conf_pose, conf_uniform,
     engine.set_display("cig", display_cig)
     engine.set_display("no_mask", display_no_mask)
     engine.set_display("sleep", display_sleep)
-    engine.set_display("sleep_pose", display_sleep_pose)
     engine.set_display("uniform", display_uniform)
-    engine.set_display("uniform_helmet", display_uniform_helmet)
-    engine.set_display("uniform_human", display_uniform_human)
     return "✅ 配置已应用"
 
 
@@ -886,13 +879,8 @@ with gr.Blocks(title="AI 视频监控", css=CUSTOM_CSS, theme=gr.themes.Soft()) 
                             display_smoke = gr.Checkbox(label="烟雾", value=True)
                             display_cig = gr.Checkbox(label="抽烟", value=True)
                             display_no_mask = gr.Checkbox(label="未戴口罩", value=True)
-                            with gr.Row():
-                                display_sleep = gr.Checkbox(label="睡岗", value=True)
-                                display_sleep_pose = gr.Checkbox(label="姿态", value=False)
-                            with gr.Row():
-                                display_uniform = gr.Checkbox(label="工服", value=True)
-                                display_uniform_helmet = gr.Checkbox(label="头盔", value=False)
-                                display_uniform_human = gr.Checkbox(label="人体", value=False)
+                            display_sleep = gr.Checkbox(label="睡岗", value=True)
+                            display_uniform = gr.Checkbox(label="工服", value=True)
                     apply_config_btn = gr.Button("✅ 应用配置", variant="primary")
                     config_status = gr.Textbox(label="", interactive=False, visible=False)
                     log_cooldown = gr.Slider(1.0, 15.0, value=5.0, step=0.5, label="日志冷却时间(秒)", visible=False)
@@ -952,8 +940,7 @@ with gr.Blocks(title="AI 视频监控", css=CUSTOM_CSS, theme=gr.themes.Soft()) 
                         frames_fire, frames_cig, frames_mask, frames_sleep, frames_uniform,
                         log_cooldown,
                         alert_fire, alert_smoke, alert_cig, alert_no_mask, alert_sleep, alert_uniform,
-                        display_fire, display_smoke, display_cig, display_no_mask, display_sleep, display_sleep_pose,
-                        display_uniform, display_uniform_helmet, display_uniform_human],
+                        display_fire, display_smoke, display_cig, display_no_mask, display_sleep, display_uniform],
                 outputs=[config_status],
             )
             export_btn.click(export_logs, outputs=[export_status])

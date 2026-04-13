@@ -202,10 +202,7 @@ _config = {
         "cig": True,
         "no_mask": True,
         "sleep": True,
-        "sleep_pose": False,
         "uniform": True,
-        "uniform_helmet": False,
-        "uniform_human": False,
     },
     "log_cooldown": 5.0,
 }
@@ -526,8 +523,6 @@ def detect_uniform():
             r = uniform_model(frame, conf=conf_val, verbose=False)
             vest_boxes, vest_scores = [], []
             human_boxes, human_scores = [], []
-            helmet_boxes, helmet_scores = [], []
-            all_boxes, all_scores, all_classes = [], [], []
             if r and r[0].boxes is not None:
                 for b in r[0].boxes:
                     x1, y1, x2, y2 = map(int, b.xyxy[0])
@@ -540,23 +535,11 @@ def detect_uniform():
                     elif cls_name == "human":
                         human_boxes.append([x1, y1, x2, y2])
                         human_scores.append(score)
-                    elif cls_name in ("helmet", "no-helmet"):
-                        helmet_boxes.append([x1, y1, x2, y2])
-                        helmet_scores.append(score)
-                    # Collect all for rendering
-                    all_boxes.append([x1, y1, x2, y2])
-                    all_scores.append(score)
-                    all_classes.append(cls_name)
             result_uniform = {
-                "boxes": all_boxes,
-                "scores": all_scores,
-                "classes": all_classes,
                 "vest_boxes": vest_boxes,
                 "vest_scores": vest_scores,
                 "human_boxes": human_boxes,
                 "human_scores": human_scores,
-                "helmet_boxes": helmet_boxes,
-                "helmet_scores": helmet_scores,
             }
             # Log when human count exceeds vest count (missing vest)
             missing = max(0, len(human_boxes) - len(vest_boxes))
@@ -788,7 +771,7 @@ def _render_loop():
                 cv2.putText(frame, f'smoke {score:.2f}', (x1, y1 - 5),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
 
-        # Uniform/vest detection boxes — vest (always under "uniform" toggle)
+        # Uniform/vest detection boxes
         if display.get("uniform", True):
             r_uniform = dict(result_uniform)
             for box, score in zip(r_uniform.get('vest_boxes', []), r_uniform.get('vest_scores', [])):
@@ -797,73 +780,50 @@ def _render_loop():
                 cv2.putText(frame, f'vest {score:.2f}', (x1, y1 - 5),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
-        # Helmet boxes
-        if display.get("uniform_helmet", False):
-            r_uniform = dict(result_uniform)
-            for box, score in zip(r_uniform.get('helmet_boxes', []), r_uniform.get('helmet_scores', [])):
-                x1, y1, x2, y2 = [int(v) for v in box]
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
-                cv2.putText(frame, f'helmet {score:.2f}', (x1, y1 - 5),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
-
-        # Human boxes
-        if display.get("uniform_human", False):
-            r_uniform = dict(result_uniform)
-            for box, score in zip(r_uniform.get('human_boxes', []), r_uniform.get('human_scores', [])):
-                x1, y1, x2, y2 = [int(v) for v in box]
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 0), 2)
-                cv2.putText(frame, f'human {score:.2f}', (x1, y1 - 5),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-
-        # Sleep detection: box always, skeleton/pose only when sleep_pose enabled
+        # Sleep detection: box + skeleton + Chinese labels
         if display.get("sleep", True):
             for entry in result_sleep:
                 box = entry['box']
                 x1, y1, x2, y2 = [int(v) for v in box]
                 info = entry.get('_info', {})
+                kp = entry.get('keypoints')
+                posture_cn = POSTURE_LABELS.get(info.get('posture', ''), '')
 
                 if info.get('is_sleeping'):
                     box_color = (0, 255, 255)
+                    status_text = "[ 睡眠中 ]  " + posture_cn
+                    status_color = (0, 255, 255)
                 else:
                     box_color = (0, 0, 255)
+                    status_text = "[ 未睡眠 ]  " + posture_cn
+                    status_color = (100, 100, 255)
 
                 cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 3)
 
-                if display.get("sleep_pose", False):
-                    kp = entry.get('keypoints')
-                    posture_cn = POSTURE_LABELS.get(info.get('posture', ''), '')
+                # 状态行
+                _, h1 = draw_chinese_text(frame, status_text, x1, max(0, y1 - 60),
+                                           color=status_color, font_size=22,
+                                           bg_color=(0, 0, 0))
 
-                    if info.get('is_sleeping'):
-                        status_text = "[ 睡眠中 ]  " + posture_cn
-                        status_color = (0, 255, 255)
-                    else:
-                        status_text = "[ 未睡眠 ]  " + posture_cn
-                        status_color = (100, 100, 255)
+                # 置信度行
+                conf_text = f"睡眠: {info.get('sleep_confidence', 0):.0%}  |  睡姿: {info.get('posture_confidence', 0):.0%}"
+                draw_chinese_text(frame, conf_text, x1, max(0, y1 - 60) + h1 + 2,
+                                  color=(220, 220, 220), font_size=18,
+                                  bg_color=(0, 0, 0))
 
-                    # 状态行
-                    _, h1 = draw_chinese_text(frame, status_text, x1, max(0, y1 - 60),
-                                               color=status_color, font_size=22,
-                                               bg_color=(0, 0, 0))
-
-                    # 置信度行
-                    conf_text = f"睡眠: {info.get('sleep_confidence', 0):.0%}  |  睡姿: {info.get('posture_confidence', 0):.0%}"
-                    draw_chinese_text(frame, conf_text, x1, max(0, y1 - 60) + h1 + 2,
-                                      color=(220, 220, 220), font_size=18,
-                                      bg_color=(0, 0, 0))
-
-                    # 骨架
-                    if kp is not None and len(kp) >= 17:
-                        for a, b in SKELETON:
-                            if float(kp[a, 2]) > KPT_CONF_THRESHOLD and float(kp[b, 2]) > KPT_CONF_THRESHOLD:
-                                pt1 = (int(kp[a, 0]), int(kp[a, 1]))
-                                pt2 = (int(kp[b, 0]), int(kp[b, 1]))
-                                cv2.line(frame, pt1, pt2, (0, 255, 0), 3)
-                                cv2.line(frame, pt1, pt2, (0, 180, 0), 1)
-                        for i in range(len(kp)):
-                            if float(kp[i, 2]) > KPT_CONF_THRESHOLD:
-                                x, y = int(kp[i, 0]), int(kp[i, 1])
-                                cv2.circle(frame, (x, y), 6, KPT_COLORS[i], -1)
-                                cv2.circle(frame, (x, y), 8, (255, 255, 255), 1)
+                # 骨架
+                if kp is not None and len(kp) >= 17:
+                    for a, b in SKELETON:
+                        if float(kp[a, 2]) > KPT_CONF_THRESHOLD and float(kp[b, 2]) > KPT_CONF_THRESHOLD:
+                            pt1 = (int(kp[a, 0]), int(kp[a, 1]))
+                            pt2 = (int(kp[b, 0]), int(kp[b, 1]))
+                            cv2.line(frame, pt1, pt2, (0, 255, 0), 3)
+                            cv2.line(frame, pt1, pt2, (0, 180, 0), 1)
+                    for i in range(len(kp)):
+                        if float(kp[i, 2]) > KPT_CONF_THRESHOLD:
+                            x, y = int(kp[i, 0]), int(kp[i, 1])
+                            cv2.circle(frame, (x, y), 6, KPT_COLORS[i], -1)
+                            cv2.circle(frame, (x, y), 8, (255, 255, 255), 1)
 
         annotated_frame = frame
         try:
