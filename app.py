@@ -169,6 +169,15 @@ def api_export_csv():
     )
 
 
+@flask_app.route("/api/vlm-status")
+def api_vlm_status():
+    """Return VLM analysis status as JSON."""
+    with engine._vlm_lock:
+        vlm = dict(engine.result_vlm)
+    vlm.pop("frame_snapshot", None)
+    return vlm
+
+
 @flask_app.route("/api/admin-stats")
 def api_admin_stats():
     """Return admin page stat summary as JSON."""
@@ -939,7 +948,13 @@ with gr.Blocks(title="AI 视频监控", css=CUSTOM_CSS, theme=gr.themes.Soft()) 
                         """<div class="admin-log-panel"><div id="admin-log-inner" style="padding:10px; color:#6b7280;">暂无日志</div></div>"""
                     )
 
-                # Sub-tab 3: System Status
+                # Sub-tab 3: VLM Analysis
+                with gr.TabItem("VLM分析"):
+                    vlm_panel = gr.HTML(
+                        """<div id="vlm-panel" style="padding:16px; color:#6b7280;">等待首次分析...</div>"""
+                    )
+
+                # Sub-tab 4: System Status
                 with gr.TabItem("系统状态"):
                     admin_status = gr.HTML(
                         """<div id="admin-status" style="text-align:center; color:#6b7280; padding:20px;">等待数据...</div>"""
@@ -1174,6 +1189,7 @@ function() {
                 'detect_cig': '抽烟检测',
                 'detect_mask': '口罩检测', 'detect_fire': '明火/烟雾',
                 'detect_sleep': '睡岗检测', 'detect_uniform': '工服检测',
+                'detect_vlm': 'VLM分析',
                 '_render_loop': '渲染输出'
             };
             var threadHtml = '';
@@ -1276,6 +1292,64 @@ function() {
         }).catch(function(){});
     }
 
+    /* ---- VLM Analysis Panel ---- */
+    function updateVlmPanel() {
+        fetch(API + '/api/vlm-status').then(function(r){return r.json();}).then(function(d){
+            var el = document.getElementById('vlm-panel');
+            if (!el) return;
+
+            if (d.error) {
+                el.innerHTML = '<div style="padding:16px; color:#dc2626;">VLM 错误: ' + d.error + '</div>';
+                return;
+            }
+            if (!d.timestamp) {
+                el.innerHTML = '<div style="padding:16px; color:#6b7280;">等待首次分析...</div>';
+                return;
+            }
+
+            var hazardLabels = {
+                fire: "明火", smoke: "烟雾", cig: "抽烟",
+                no_mask: "未戴口罩", sleep: "睡岗", uniform: "未穿工服"
+            };
+            var html = '<div style="padding:16px;">';
+            html += '<div style="font-size:12px; color:#6b7280; margin-bottom:12px;">最后分析: ' + d.timestamp + '</div>';
+
+            // 3x2 hazard grid
+            html += '<div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-bottom:12px;">';
+            for (var key in hazardLabels) {
+                var detected = d.hazards && d.hazards[key];
+                var conf = (d.confidence && d.confidence[key]) || 0;
+                var bg = detected ? '#fef2f2' : '#f0fdf4';
+                var border = detected ? '#dc2626' : '#22c55e';
+                var color = detected ? '#dc2626' : '#16a34a';
+                var text = detected ? '检测到' : '正常';
+                html += '<div style="background:' + bg + '; border:2px solid ' + border + '; border-radius:8px; padding:12px; text-align:center;">';
+                html += '<div style="font-size:13px; font-weight:600;">' + hazardLabels[key] + '</div>';
+                html += '<div style="font-size:18px; font-weight:700; color:' + color + '; margin:4px 0;">' + text + '</div>';
+                html += '<div style="font-size:11px; color:#6b7280;">置信度: ' + (conf * 100).toFixed(0) + '%</div>';
+                html += '</div>';
+            }
+            html += '</div>';
+
+            // Description
+            if (d.description) {
+                html += '<div style="background:#f8fafc; border-radius:8px; padding:12px; font-size:13px; margin-bottom:8px;">';
+                html += '<div style="font-weight:600; margin-bottom:4px;">场景描述</div>';
+                html += '<div>' + d.description + '</div></div>';
+            }
+
+            // Raw analysis (collapsible)
+            if (d.analysis_text) {
+                html += '<details style="font-size:12px;"><summary style="cursor:pointer; color:#6b7280;">原始分析结果</summary>';
+                html += '<pre style="background:#f1f5f9; padding:8px; border-radius:4px; max-height:200px; overflow:auto; font-size:11px;">' + d.analysis_text.replace(/</g, '&lt;') + '</pre>';
+                html += '</details>';
+            }
+
+            html += '</div>';
+            el.innerHTML = html;
+        }).catch(function(){});
+    }
+
     // Poll every 2 seconds for main page data
     setInterval(function() {
         updateStats();
@@ -1288,6 +1362,7 @@ function() {
         updateAdminStatus();
         updateAdminStats();
         updateAdminLogs();
+        updateVlmPanel();
     }, 5000);
 
     // Initial fetch after a short delay
@@ -1298,6 +1373,7 @@ function() {
         updateAdminStatus();
         updateAdminStats();
         updateAdminLogs();
+        updateVlmPanel();
     }, 500);
 }
 """)

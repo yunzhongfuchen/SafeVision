@@ -3,6 +3,7 @@
 import cv2
 import numpy as np
 import base64
+import json
 import threading
 import time
 from datetime import datetime
@@ -67,6 +68,51 @@ print(f"Uniform model loaded, classes: {uniform_model.names}")
 
 
 # ======================
+# VLM Model (lazy loaded)
+# ======================
+
+_vlm_model = None
+_vlm_processor = None
+_vlm_load_lock = threading.Lock()
+
+
+def _load_vlm_model():
+    """延迟加载 Qwen2.5-VL-3B-Instruct，首次检测时才加载。"""
+    global _vlm_model, _vlm_processor
+    with _vlm_load_lock:
+        if _vlm_model is not None:
+            return
+        from transformers import AutoModelForVision2Seq, AutoProcessor
+        import torch
+
+        model_name = "Qwen/Qwen2.5-VL-3B-Instruct"
+
+        # 优先使用本地缓存
+        cache_base = _os.path.expanduser("~/.cache/huggingface/hub")
+        cached = False
+        if _os.path.isdir(cache_base):
+            snapshot_dirs = _glob.glob(
+                _os.path.join(cache_base, "models--Qwen--Qwen2.5-VL-3B-Instruct", "snapshots", "*")
+            )
+            if snapshot_dirs:
+                cached = True
+
+        if cached:
+            print("[VLM] Loading from cache...")
+        else:
+            print("[VLM] Downloading model (first run, may take a while)...")
+            hf_hub_download(repo_id=model_name, filename="config.json")
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        dtype = torch.float16 if device == "cuda" else torch.float32
+        _vlm_processor = AutoProcessor.from_pretrained(model_name)
+        _vlm_model = AutoModelForVision2Seq.from_pretrained(
+            model_name, torch_dtype=dtype, device_map="auto"
+        )
+        print(f"[VLM] Model loaded on {device}, dtype={dtype}")
+
+
+# ======================
 # Shared State
 # ======================
 
@@ -88,6 +134,18 @@ result_fire = {}
 result_smoke = {}
 result_sleep = {}
 result_uniform = {}
+
+# VLM analysis results
+result_vlm = {
+    "analysis_text": "",
+    "hazards": {},
+    "confidence": {},
+    "description": "",
+    "timestamp": None,
+    "error": None,
+    "frame_snapshot": None,
+}
+_vlm_lock = threading.Lock()
 
 # State trackers
 sleep_tracker = {}
@@ -349,6 +407,8 @@ def export_logs_csv():
     type_map = {
         "fire": "明火", "smoke": "烟雾", "cig": "抽烟",
         "no_mask": "未戴口罩", "sleep": "睡岗", "uniform": "未穿工服",
+        "vlm_fire": "VLM-明火", "vlm_smoke": "VLM-烟雾", "vlm_cig": "VLM-抽烟",
+        "vlm_no_mask": "VLM-未戴口罩", "vlm_sleep": "VLM-睡岗", "vlm_uniform": "VLM-未穿工服",
     }
     for entry in entries:
         writer.writerow([entry.time, type_map.get(entry.event_type, entry.event_type), f"{entry.score:.2f}"])
@@ -558,6 +618,198 @@ def detect_uniform():
             consec_count = 0
         tick()
         time.sleep(0.01)
+
+
+# ======================
+# VLM Detection Thread
+# ======================
+
+VLM_INTERVAL = 30  # seconds between analyses
+VLM_CONF_THRESHOLD = 0.5  # minimum confidence to log
+
+VLM_HAZARD_TYPES = ["fire", "smoke", "cig", "no_mask", "sleep", "uniform"]
+VLM_HAZARD_LABELS = {
+    "fire": "明火", "smoke": "烟雾", "cig": "抽烟",
+    "no_mask": "未戴口罩", "sleep": "睡岗", "uniform": "未穿工服",
+}
+
+
+def _parse_vlm_response(text):
+    """解析 VLM 的 JSON 响应，四级容错。"""
+    hazards = {}
+    confidences = {}
+    description = ""
+
+    # Strategy 1: 直接 JSON 解析
+    try:
+        data = json.loads(text)
+        for htype in VLM_HAZARD_TYPES:
+            if htype in data:
+                hazards[htype] = data[htype].get("detected", False)
+                confidences[htype] = float(data[htype].get("confidence", 0))
+        description = data.get("description", "")
+        return hazards, confidences, description
+    except (json.JSONDecodeError, AttributeError, ValueError):
+        pass
+
+    # Strategy 2: 提取代码块中的 JSON
+    import re as _re
+    match = _re.search(r'```(?:json)?\s*\n?({.*?})\n?\s*```', text, _re.DOTALL)
+    if match:
+        try:
+            data = json.loads(match.group(1))
+            for htype in VLM_HAZARD_TYPES:
+                if htype in data:
+                    hazards[htype] = data[htype].get("detected", False)
+                    confidences[htype] = float(data[htype].get("confidence", 0))
+            description = data.get("description", "")
+            return hazards, confidences, description
+        except (json.JSONDecodeError, AttributeError, ValueError):
+            pass
+
+    # Strategy 3: 提取第一个 { } 块
+    start = text.find('{')
+    end = text.rfind('}')
+    if start != -1 and end != -1:
+        try:
+            data = json.loads(text[start:end+1])
+            for htype in VLM_HAZARD_TYPES:
+                if htype in data:
+                    hazards[htype] = data[htype].get("detected", False)
+                    confidences[htype] = float(data[htype].get("confidence", 0))
+            description = data.get("description", "")
+            return hazards, confidences, description
+        except (json.JSONDecodeError, AttributeError, ValueError):
+            pass
+
+    # Strategy 4: 正则逐个字段提取
+    for htype in VLM_HAZARD_TYPES:
+        det_match = _re.search(
+            rf'"{htype}".*?"detected"\s*:\s*(true|false)', text,
+            _re.IGNORECASE | _re.DOTALL
+        )
+        conf_match = _re.search(
+            rf'"{htype}".*?"confidence"\s*:\s*([\d.]+)', text,
+            _re.IGNORECASE | _re.DOTALL
+        )
+        if det_match:
+            hazards[htype] = det_match.group(1).lower() == 'true'
+        if conf_match:
+            confidences[htype] = float(conf_match.group(1))
+
+    desc_match = _re.search(r'"description"\s*:\s*"([^"]+)"', text)
+    if desc_match:
+        description = desc_match.group(1)
+
+    return hazards, confidences, description
+
+
+VLM_PROMPT = """分析这张监控画面中的安全隐患。以JSON格式返回，不要其他内容：
+{
+  "fire": {"detected": true/false, "confidence": 0.0-1.0},
+  "smoke": {"detected": true/false, "confidence": 0.0-1.0},
+  "cig": {"detected": true/false, "confidence": 0.0-1.0},
+  "no_mask": {"detected": true/false, "confidence": 0.0-1.0},
+  "sleep": {"detected": true/false, "confidence": 0.0-1.0},
+  "uniform": {"detected": true/false, "confidence": 0.0-1.0},
+  "description": "简要场景描述（50字以内中文）"
+}
+只检查这些隐患类型，返回合法JSON。"""
+
+
+def detect_vlm():
+    """VLM 辅助检测：每 30 秒分析一帧，独立判断安全隐患。"""
+    global _vlm_model
+    try:
+        _load_vlm_model()
+    except Exception as e:
+        with _vlm_lock:
+            result_vlm["error"] = f"模型加载失败: {e}"
+        return
+
+    tick, get_fps = _track_thread_fps("detect_vlm")
+    last_analysis_time = 0.0
+
+    try:
+        while running:
+            now = time.time()
+            if now - last_analysis_time < VLM_INTERVAL:
+                time.sleep(1)
+                continue
+
+            if latest_frame is None:
+                time.sleep(1)
+                continue
+
+            frame_copy = latest_frame.copy()
+            last_analysis_time = now
+            tick()
+
+            try:
+                # BGR → RGB → PIL
+                frame_rgb = cv2.cvtColor(frame_copy, cv2.COLOR_BGR2RGB)
+                pil_image = Image.fromarray(frame_rgb)
+
+                messages = [
+                    {"role": "user", "content": [
+                        {"type": "image", "image": pil_image},
+                        {"type": "text", "text": VLM_PROMPT},
+                    ]}
+                ]
+                text = _vlm_processor.apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=True
+                )
+                inputs = _vlm_processor(
+                    text=[text], images=[pil_image],
+                    padding=True, return_tensors="pt"
+                )
+                inputs = inputs.to(_vlm_model.device)
+
+                outputs = _vlm_model.generate(
+                    **inputs, max_new_tokens=512, do_sample=False
+                )
+                response_text = _vlm_processor.decode(
+                    outputs[0][inputs["input_ids"].shape[1]:],
+                    skip_special_tokens=True
+                )
+
+                # 解析响应
+                hazards, confidences, description = _parse_vlm_response(response_text)
+
+                # 截取快照
+                _, jpeg = cv2.imencode(".jpg", frame_copy, [cv2.IMWRITE_JPEG_QUALITY, 60])
+                snap_b64 = "data:image/jpeg;base64," + base64.b64encode(jpeg.tobytes()).decode()
+
+                # 存储结果
+                with _vlm_lock:
+                    result_vlm.update({
+                        "analysis_text": response_text,
+                        "hazards": hazards,
+                        "confidence": confidences,
+                        "description": description,
+                        "timestamp": datetime.now().strftime("%H:%M:%S"),
+                        "error": None,
+                        "frame_snapshot": snap_b64,
+                    })
+
+                # 记录检测到的高置信度隐患
+                for htype in VLM_HAZARD_TYPES:
+                    if hazards.get(htype) and confidences.get(htype, 0) >= VLM_CONF_THRESHOLD:
+                        add_log_entry(
+                            f"vlm_{htype}",
+                            confidences[htype],
+                            box=None,
+                            snapshot=snap_b64,
+                        )
+
+            except Exception as e:
+                with _vlm_lock:
+                    result_vlm["error"] = str(e)
+                    result_vlm["timestamp"] = datetime.now().strftime("%H:%M:%S")
+    finally:
+        with _thread_stats_lock:
+            if "detect_vlm" in _thread_stats:
+                _thread_stats["detect_vlm"]["running"] = False
 
 
 # ======================
@@ -887,6 +1139,8 @@ def start_detection(source_type, source_path=None):
     result_smoke.clear()
     result_sleep.clear()
     result_uniform.clear()
+    with _vlm_lock:
+        result_vlm.clear()
 
     current_source = source_type
     current_source_path = source_path
@@ -904,6 +1158,7 @@ def start_detection(source_type, source_path=None):
         ("detect_fire", detect_fire),
         ("detect_sleep", detect_sleep),
         ("detect_uniform", detect_uniform),
+        ("detect_vlm", detect_vlm),
         ("_render_loop", _render_loop),
     ]
 
