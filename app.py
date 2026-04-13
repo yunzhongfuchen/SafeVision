@@ -879,7 +879,7 @@ with gr.Blocks(title="AI 视频监控", css=CUSTOM_CSS, theme=gr.themes.Soft()) 
                             frames_cig = gr.Slider(1, 30, value=5, step=1, label="抽烟判定帧数")
                             frames_mask = gr.Slider(1, 30, value=5, step=1, label="口罩判定帧数")
                             frames_sleep = gr.Slider(30, 300, value=150, step=10, label="睡岗判定帧数")
-                            frames_uniform = gr.Slider(1, 30, value=5, step=1, label="工服判定帧数")
+                            frames_uniform = gr.Slider(1, 300, value=20, step=1, label="工服判定帧数")
 
                             gr.Markdown("**▸ 检测框显示**")
                             display_fire = gr.Checkbox(label="明火", value=True)

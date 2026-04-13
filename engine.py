@@ -186,7 +186,7 @@ _config = {
     "frames_cig": 5,
     "frames_mask": 5,
     "frames_sleep": 150,
-    "frames_uniform": 5,
+    "frames_uniform": 20,
 
     "alerts": {
         "fire": True,
