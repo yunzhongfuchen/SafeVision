@@ -152,8 +152,10 @@ def api_admin_logs():
     result = []
     for entry in entries:
         label, cls = type_map.get(entry.event_type, ("未知", ""))
+        source = "VLM" if entry.event_type.startswith("vlm_") else "CV"
         result.append({
             "time": entry.time,
+            "source": source,
             "label": label,
             "cls": cls,
             "score": entry.score,
@@ -1287,8 +1289,8 @@ function() {
             lastAdminLogCount = logs.length;
             var el = document.getElementById('admin-log-inner');
             if (!el) return;
-            var html = '<div style="display:grid; grid-template-columns:80px 1fr 80px 80px; gap:4px; color:#6b7280; font-size:11px; padding:0 8px; margin-bottom:6px;">';
-            html += '<span>时间</span><span>类型</span><span>置信度</span><span></span></div>';
+            var html = '<div style="display:grid; grid-template-columns:70px 1fr 55px 70px 80px; gap:4px; color:#6b7280; font-size:11px; padding:0 8px; margin-bottom:6px;">';
+            html += '<span>时间</span><span>类型</span><span>来源</span><span>置信度</span><span></span></div>';
             for (var i = logs.length - 1; i >= 0; i--) {
                 var entry = logs[i];
                 var idx = logs.length - 1 - i;
@@ -1298,8 +1300,11 @@ function() {
                     var snapId = 'snap-' + idx;
                     snapBtn = '<button class="snap-btn" data-snap="' + snapId + '" onclick="showSnapshot(\\'' + snapId + '\\')">查看截图</button>';
                 }
-                html += '<div class="log-entry ' + entry.cls + '" style="display:grid; grid-template-columns:80px 1fr 80px 80px; gap:4px; align-items:center;">';
-                html += '<span>' + entry.time + '</span><span>' + entry.label + '</span><span>' + entry.score.toFixed(2) + '</span><span>' + snapBtn + '</span>';
+                var srcTag = entry.source === 'VLM'
+                    ? '<span style="color:#7c3aed; font-size:10px; font-weight:600;">VLM</span>'
+                    : '<span style="color:#6b7280; font-size:10px;">CV</span>';
+                html += '<div class="log-entry ' + entry.cls + '" style="display:grid; grid-template-columns:70px 1fr 55px 70px 80px; gap:4px; align-items:center;">';
+                html += '<span>' + entry.time + '</span><span>' + entry.label + '</span><span>' + srcTag + '</span><span>' + entry.score.toFixed(2) + '</span><span>' + snapBtn + '</span>';
                 html += '</div>';
                 if (entry.snapshot) {
                     var snapId2 = 'snap-' + idx;
