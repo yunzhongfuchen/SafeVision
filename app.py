@@ -145,6 +145,18 @@ def api_clear_logs():
     return {"status": "ok"}
 
 
+@flask_app.route("/api/export-csv")
+def api_export_csv():
+    """Export logs as a downloadable CSV file."""
+    from flask import Response
+    csv_data = engine.export_logs_csv()
+    return Response(
+        csv_data.encode("utf-8-sig"),
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment;filename=detection_logs.csv"},
+    )
+
+
 @flask_app.route("/api/admin-stats")
 def api_admin_stats():
     """Return admin page stat summary as JSON."""
@@ -909,7 +921,6 @@ with gr.Blocks(title="AI 视频监控", css=CUSTOM_CSS, theme=gr.themes.Soft()) 
                     admin_log = gr.HTML(
                         """<div class="admin-log-panel"><div id="admin-log-inner" style="padding:10px; color:#6b7280;">暂无日志</div></div>"""
                     )
-                    export_status = gr.Textbox(label="导出状态", interactive=False)
 
                 # Sub-tab 3: System Status
                 with gr.TabItem("系统状态"):
@@ -957,7 +968,18 @@ with gr.Blocks(title="AI 视频监控", css=CUSTOM_CSS, theme=gr.themes.Soft()) 
                         display_fire, display_smoke, display_cig, display_no_mask, display_sleep, display_uniform],
                 outputs=[config_status],
             )
-            export_btn.click(export_logs, outputs=[export_status])
+            export_btn.click(None, js="""
+            function() {
+                var url = 'http://' + window.location.hostname + ':5000/api/export-csv';
+                var a = document.createElement('a');
+                a.href = url;
+                a.download = 'detection_logs.csv';
+                a.target = '_blank';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+            }
+            """)
 
     # Snapshot JS + polling for real-time stats/logs/fire-alert
     demo.load(None, js="""
