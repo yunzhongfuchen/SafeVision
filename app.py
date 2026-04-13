@@ -747,7 +747,7 @@ def export_logs():
     path = os.path.join(tmpdir, "detection_logs.csv")
     with open(path, "w", encoding="utf-8-sig") as f:
         f.write(csv_data)
-    return path, f"已导出到 {path}"
+    return f"已导出到 {path}"
 
 
 def get_config_values():
@@ -909,7 +909,7 @@ with gr.Blocks(title="AI 视频监控", css=CUSTOM_CSS, theme=gr.themes.Soft()) 
                     admin_log = gr.HTML(
                         """<div class="admin-log-panel"><div id="admin-log-inner" style="padding:10px; color:#6b7280;">暂无日志</div></div>"""
                     )
-                    export_status = gr.Textbox(label="", interactive=False, visible=False)
+                    export_status = gr.Textbox(label="导出状态", interactive=False)
 
                 # Sub-tab 3: System Status
                 with gr.TabItem("系统状态"):
