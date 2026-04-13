@@ -951,7 +951,7 @@ with gr.Blocks(title="AI 视频监控", css=CUSTOM_CSS, theme=gr.themes.Soft()) 
             """)
             clear_log_btn.click(None, js="""
             function() {
-                fetch('http://' + window.location.hostname + ':5000/api/clear-logs').then(function(){
+                fetch('http://' + window.location.hostname + ':5000/api/clear-logs', {method: 'POST'}).then(function(){
                     window.lastAdminLogCount = -1;
                     if (window.updateAdminLogs) window.updateAdminLogs();
                 });
