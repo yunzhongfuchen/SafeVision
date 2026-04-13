@@ -77,6 +77,12 @@ def api_logs():
         "no_mask": ("😷 未戴口罩", "log-no_mask"),
         "sleep": ("💤 睡岗", "log-sleep"),
         "uniform": ("🦺 未穿工服", "log-uniform"),
+        "vlm_fire": ("🤖 明火", "log-fire"),
+        "vlm_smoke": ("🤖 烟雾", "log-smoke"),
+        "vlm_cig": ("🤖 抽烟", "log-cig"),
+        "vlm_no_mask": ("🤖 未戴口罩", "log-no_mask"),
+        "vlm_sleep": ("🤖 睡岗", "log-sleep"),
+        "vlm_uniform": ("🤖 未穿工服", "log-uniform"),
     }
     result = []
     for entry in entries:
@@ -136,6 +142,12 @@ def api_admin_logs():
         "no_mask": ("😷 未戴口罩", "log-no_mask"),
         "sleep": ("💤 睡岗", "log-sleep"),
         "uniform": ("🦺 未穿工服", "log-uniform"),
+        "vlm_fire": ("🤖 明火", "log-fire"),
+        "vlm_smoke": ("🤖 烟雾", "log-smoke"),
+        "vlm_cig": ("🤖 抽烟", "log-cig"),
+        "vlm_no_mask": ("🤖 未戴口罩", "log-no_mask"),
+        "vlm_sleep": ("🤖 睡岗", "log-sleep"),
+        "vlm_uniform": ("🤖 未穿工服", "log-uniform"),
     }
     result = []
     for entry in entries:
@@ -182,7 +194,8 @@ def api_vlm_status():
 def api_admin_stats():
     """Return admin page stat summary as JSON."""
     logs = engine.get_log_entries()
-    counts = {"fire": 0, "smoke": 0, "cig": 0, "no_mask": 0, "sleep": 0, "uniform": 0}
+    counts = {"fire": 0, "smoke": 0, "cig": 0, "no_mask": 0, "sleep": 0, "uniform": 0,
+              "vlm_fire": 0, "vlm_smoke": 0, "vlm_cig": 0, "vlm_no_mask": 0, "vlm_sleep": 0, "vlm_uniform": 0}
     for entry in logs:
         counts[entry.event_type] = counts.get(entry.event_type, 0) + 1
     total = sum(counts.values())
@@ -937,7 +950,8 @@ with gr.Blocks(title="AI 视频监控", css=CUSTOM_CSS, theme=gr.themes.Soft()) 
                     )
                     with gr.Row():
                         log_filter = gr.Dropdown(
-                            choices=["全部", "🔥 明火", "🌫️ 烟雾", "🚬 抽烟", "😷 未戴口罩", "💤 睡岗", "🦺 未穿工服"],
+                            choices=["全部", "🔥 明火", "🌫️ 烟雾", "🚬 抽烟", "😷 未戴口罩", "💤 睡岗", "🦺 未穿工服",
+                                     "🤖 VLM-明火", "🤖 VLM-烟雾", "🤖 VLM-抽烟", "🤖 VLM-未戴口罩", "🤖 VLM-睡岗", "🤖 VLM-未穿工服"],
                             value="全部",
                             label="筛选类型",
                             scale=1,
@@ -1235,6 +1249,7 @@ function() {
             if (!el) return;
             var c = d.counts;
             var p = d.percentages;
+            var vlmTotal = (c.vlm_fire||0) + (c.vlm_smoke||0) + (c.vlm_cig||0) + (c.vlm_no_mask||0) + (c.vlm_sleep||0) + (c.vlm_uniform||0);
             var html = '<div style="display:flex; gap:8px; justify-content:center; padding:10px; flex-wrap:wrap;">';
             html += '<div style="background:#fee2e2; padding:10px 16px; border-radius:8px; text-align:center; flex:1; min-width:80px;">';
             html += '<div style="font-size:20px; color:#dc2626; font-weight:700;">' + c.fire + '</div>';
@@ -1254,6 +1269,9 @@ function() {
             html += '<div style="background:#d1fae5; padding:10px 16px; border-radius:8px; text-align:center; flex:1; min-width:80px;">';
             html += '<div style="font-size:20px; color:#059669; font-weight:700;">' + c.uniform + '</div>';
             html += '<div style="font-size:10px; color:#065f46;">工服 (' + p.uniform + ')</div></div>';
+            html += '<div style="background:#f3f4f6; padding:10px 16px; border-radius:8px; text-align:center; flex:1; min-width:80px; border:2px solid #6b7280;">';
+            html += '<div style="font-size:20px; color:#374151; font-weight:700;">' + vlmTotal + '</div>';
+            html += '<div style="font-size:10px; color:#6b7280;">VLM(' + (p.vlm_fire||'0%') + ')</div></div>';
             html += '</div>';
             el.innerHTML = html;
         }).catch(function(){});
