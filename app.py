@@ -435,7 +435,7 @@ CUSTOM_CSS = """
 
 STATS_HTML = """
 <div class="stat-bar">
-    <span class="stat-card stat-fire">🔥 火: <span id="stat-fire">0</span></span>
+    <span class="stat-card stat-fire">🔥 明火: <span id="stat-fire">0</span></span>
     <span class="stat-card stat-smoke">🌫️ 烟: <span id="stat-smoke">0</span></span>
     <span class="stat-card stat-cig">🚬 抽烟: <span id="stat-cig">0</span></span>
     <span class="stat-card stat-mask">😷 未戴: <span id="stat-mask">0</span></span>
@@ -453,7 +453,7 @@ VIDEO_HTML = """<div class="video-wrapper">
 FIRE_ALERT_HTML = """
 <div class="fire-alert" id="fire-alert-container">
     <div class="fire-dot" id="fire-dot"></div>
-    <span class="fire-label" id="fire-label">火警状态：正常</span>
+    <span class="fire-label" id="fire-label">明火状态：正常</span>
 </div>
 """
 
@@ -484,7 +484,7 @@ def update_stats():
     stats = engine.get_stats()
     return f"""
     <div class="stat-bar">
-        <span class="stat-card stat-fire">🔥 火: {stats['fire']}</span>
+        <span class="stat-card stat-fire">🔥 明火: {stats['fire']}</span>
         <span class="stat-card stat-smoke">🌫️ 烟: {stats['smoke']}</span>
         <span class="stat-card stat-cig">🚬 抽烟: {stats['cig']}</span>
         <span class="stat-card stat-mask">😷 未戴: {stats['no_mask']}</span>
@@ -591,7 +591,7 @@ def update_system_status():
     thread_names = {
         "detect_cig": "抽烟检测",
         "detect_mask": "口罩检测",
-        "detect_fire": "火焰烟雾",
+        "detect_fire": "明火/烟雾",
         "detect_sleep": "睡岗检测",
         "detect_uniform": "工服检测",
         "_render_loop": "渲染输出",
@@ -628,7 +628,7 @@ def update_system_status():
         <div style="border-top:1px solid #e5e7eb; margin:6px 0;"></div>
         <div style="font-size:13px; font-weight:600; margin-bottom:4px;">当前帧目标数</div>
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px; font-size:12px;">
-            <span>🔥 火: {stats['fire']}</span>
+            <span>🔥 明火: {stats['fire']}</span>
             <span>🌫️ 烟: {stats['smoke']}</span>
             <span>🚬 抽烟: {stats['cig']}</span>
             <span>😷 未戴: {stats['no_mask']}</span>
@@ -656,7 +656,7 @@ def update_admin_stats():
     <div style="display:flex; gap:8px; justify-content:center; padding:10px; flex-wrap:wrap;">
         <div style="background:#fee2e2; padding:10px 16px; border-radius:8px; text-align:center; flex:1; min-width:80px;">
             <div style="font-size:20px; color:#dc2626; font-weight:700;">{counts['fire']}</div>
-            <div style="font-size:10px; color:#991b1b;">火警 ({pct('fire')})</div>
+            <div style="font-size:10px; color:#991b1b;">明火 ({pct('fire')})</div>
         </div>
         <div style="background:#fef3c7; padding:10px 16px; border-radius:8px; text-align:center; flex:1; min-width:80px;">
             <div style="font-size:20px; color:#d97706; font-weight:700;">{counts['smoke']}</div>
@@ -854,11 +854,48 @@ with gr.Blocks(title="AI 视频监控", css=CUSTOM_CSS, theme=gr.themes.Soft()) 
 
         with gr.TabItem("后台管理"):
             with gr.Tabs():
-                # Sub-tab 1: System Status
-                with gr.TabItem("系统状态"):
-                    admin_status = gr.HTML(
-                        """<div id="admin-status" style="text-align:center; color:#6b7280; padding:20px;">等待数据...</div>"""
-                    )
+                # Sub-tab 1: Model Config
+                with gr.TabItem("模型配置"):
+                    with gr.Row():
+                        with gr.Column():
+                            gr.Markdown("**▸ 阈值设定**")
+                            conf_fire = gr.Slider(0.1, 0.9, value=0.25, step=0.05, label="明火/烟雾检测阈值")
+                            conf_cig = gr.Slider(0.1, 0.9, value=0.25, step=0.05, label="抽烟检测阈值")
+                            conf_mask = gr.Slider(0.1, 0.9, value=0.25, step=0.05, label="口罩检测阈值")
+                            conf_pose = gr.Slider(0.1, 0.9, value=0.25, step=0.05, label="睡岗检测阈值")
+                            conf_uniform = gr.Slider(0.1, 0.9, value=0.25, step=0.05, label="工服检测阈值")
+
+                            gr.Markdown("**▸ 告警开关**")
+                            alert_fire = gr.Checkbox(label="明火", value=True)
+                            alert_smoke = gr.Checkbox(label="烟雾", value=True)
+                            alert_cig = gr.Checkbox(label="抽烟", value=True)
+                            alert_no_mask = gr.Checkbox(label="未戴口罩", value=True)
+                            alert_sleep = gr.Checkbox(label="睡岗", value=True)
+                            alert_uniform = gr.Checkbox(label="工服", value=True)
+
+                        with gr.Column():
+                            gr.Markdown("**▸ 判定帧数**")
+                            frames_fire = gr.Slider(1, 30, value=5, step=1, label="明火/烟雾判定帧数")
+                            frames_cig = gr.Slider(1, 30, value=5, step=1, label="抽烟判定帧数")
+                            frames_mask = gr.Slider(1, 30, value=5, step=1, label="口罩判定帧数")
+                            frames_sleep = gr.Slider(30, 300, value=150, step=10, label="睡岗判定帧数")
+                            frames_uniform = gr.Slider(1, 30, value=5, step=1, label="工服判定帧数")
+
+                            gr.Markdown("**▸ 检测框显示**")
+                            display_fire = gr.Checkbox(label="明火", value=True)
+                            display_smoke = gr.Checkbox(label="烟雾", value=True)
+                            display_cig = gr.Checkbox(label="抽烟", value=True)
+                            display_no_mask = gr.Checkbox(label="未戴口罩", value=True)
+                            with gr.Row():
+                                display_sleep = gr.Checkbox(label="睡岗", value=True)
+                                display_sleep_pose = gr.Checkbox(label="姿态", value=False)
+                            with gr.Row():
+                                display_uniform = gr.Checkbox(label="工服", value=True)
+                                display_uniform_helmet = gr.Checkbox(label="头盔", value=False)
+                                display_uniform_human = gr.Checkbox(label="人体", value=False)
+                    apply_config_btn = gr.Button("✅ 应用配置", variant="primary")
+                    config_status = gr.Textbox(label="", interactive=False, visible=False)
+                    log_cooldown = gr.Slider(1.0, 15.0, value=5.0, step=0.5, label="日志冷却时间(秒)", visible=False)
 
                 # Sub-tab 2: Log Management
                 with gr.TabItem("日志管理"):
@@ -879,48 +916,11 @@ with gr.Blocks(title="AI 视频监控", css=CUSTOM_CSS, theme=gr.themes.Soft()) 
                     )
                     export_status = gr.Textbox(label="", interactive=False, visible=False)
 
-                # Sub-tab 3: Model Config
-                with gr.TabItem("模型配置"):
-                    with gr.Row():
-                        with gr.Column():
-                            gr.Markdown("**▸ 阈值设定**")
-                            conf_fire = gr.Slider(0.1, 0.9, value=0.25, step=0.05, label="火焰/烟雾检测阈值")
-                            conf_cig = gr.Slider(0.1, 0.9, value=0.25, step=0.05, label="抽烟检测阈值")
-                            conf_mask = gr.Slider(0.1, 0.9, value=0.25, step=0.05, label="口罩检测阈值")
-                            conf_pose = gr.Slider(0.1, 0.9, value=0.25, step=0.05, label="睡岗检测阈值")
-                            conf_uniform = gr.Slider(0.1, 0.9, value=0.25, step=0.05, label="工服检测阈值")
-
-                            gr.Markdown("**▸ 告警开关**")
-                            alert_fire = gr.Checkbox(label="火焰", value=True)
-                            alert_smoke = gr.Checkbox(label="烟雾", value=True)
-                            alert_cig = gr.Checkbox(label="抽烟", value=True)
-                            alert_no_mask = gr.Checkbox(label="未戴口罩", value=True)
-                            alert_sleep = gr.Checkbox(label="睡岗", value=True)
-                            alert_uniform = gr.Checkbox(label="工服", value=True)
-
-                        with gr.Column():
-                            gr.Markdown("**▸ 判定帧数**")
-                            frames_fire = gr.Slider(1, 30, value=3, step=1, label="火焰/烟雾判定帧数")
-                            frames_cig = gr.Slider(1, 30, value=3, step=1, label="抽烟判定帧数")
-                            frames_mask = gr.Slider(1, 30, value=3, step=1, label="口罩判定帧数")
-                            frames_sleep = gr.Slider(30, 300, value=150, step=10, label="睡岗判定帧数")
-                            frames_uniform = gr.Slider(1, 30, value=3, step=1, label="工服判定帧数")
-
-                            gr.Markdown("**▸ 检测框显示**")
-                            display_fire = gr.Checkbox(label="火焰", value=True)
-                            display_smoke = gr.Checkbox(label="烟雾", value=True)
-                            display_cig = gr.Checkbox(label="抽烟", value=True)
-                            display_no_mask = gr.Checkbox(label="未戴口罩", value=True)
-                            with gr.Row():
-                                display_sleep = gr.Checkbox(label="睡岗", value=True)
-                                display_sleep_pose = gr.Checkbox(label="姿态", value=False)
-                            with gr.Row():
-                                display_uniform = gr.Checkbox(label="工服", value=True)
-                                display_uniform_helmet = gr.Checkbox(label="头盔", value=False)
-                                display_uniform_human = gr.Checkbox(label="人体", value=False)
-                    apply_config_btn = gr.Button("✅ 应用配置", variant="primary")
-                    config_status = gr.Textbox(label="", interactive=False, visible=False)
-                    log_cooldown = gr.Slider(1.0, 15.0, value=5.0, step=0.5, label="日志冷却时间(秒)", visible=False)
+                # Sub-tab 3: System Status
+                with gr.TabItem("系统状态"):
+                    admin_status = gr.HTML(
+                        """<div id="admin-status" style="text-align:center; color:#6b7280; padding:20px;">等待数据...</div>"""
+                    )
 
             # ======================
             # Event Bindings
@@ -1114,7 +1114,7 @@ function() {
             } else {
                 dot.className = 'fire-dot';
                 label.className = 'fire-label';
-                label.textContent = '火警状态：正常';
+                label.textContent = '明火状态：正常';
                 var existingBtn = document.getElementById('fire-mute-inline-btn');
                 if (existingBtn) existingBtn.remove();
             }
@@ -1132,7 +1132,7 @@ function() {
             var threads = s.threads || {};
             var threadNames = {
                 'detect_cig': '抽烟检测',
-                'detect_mask': '口罩检测', 'detect_fire': '火焰烟雾',
+                'detect_mask': '口罩检测', 'detect_fire': '明火/烟雾',
                 'detect_sleep': '睡岗检测', 'detect_uniform': '工服检测',
                 '_render_loop': '渲染输出'
             };
@@ -1148,7 +1148,7 @@ function() {
             }
             var statsHtml = '<div style="display:grid; grid-template-columns:1fr 1fr; gap:4px; font-size:12px;">';
             if (s.stats) {
-                statsHtml += '<span>🔥 火: ' + s.stats.fire + '</span>';
+                statsHtml += '<span>🔥 明火: ' + s.stats.fire + '</span>';
                 statsHtml += '<span>🌫️ 烟: ' + s.stats.smoke + '</span>';
                 statsHtml += '<span>🚬 抽烟: ' + s.stats.cig + '</span>';
                 statsHtml += '<span>😷 未戴: ' + s.stats.no_mask + '</span>';
@@ -1182,7 +1182,7 @@ function() {
             var html = '<div style="display:flex; gap:8px; justify-content:center; padding:10px; flex-wrap:wrap;">';
             html += '<div style="background:#fee2e2; padding:10px 16px; border-radius:8px; text-align:center; flex:1; min-width:80px;">';
             html += '<div style="font-size:20px; color:#dc2626; font-weight:700;">' + c.fire + '</div>';
-            html += '<div style="font-size:10px; color:#991b1b;">火警 (' + p.fire + ')</div></div>';
+            html += '<div style="font-size:10px; color:#991b1b;">明火 (' + p.fire + ')</div></div>';
             html += '<div style="background:#fef3c7; padding:10px 16px; border-radius:8px; text-align:center; flex:1; min-width:80px;">';
             html += '<div style="font-size:20px; color:#d97706; font-weight:700;">' + c.smoke + '</div>';
             html += '<div style="font-size:10px; color:#92400e;">烟雾 (' + p.smoke + ')</div></div>';
