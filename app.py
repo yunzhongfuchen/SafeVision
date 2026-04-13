@@ -944,9 +944,8 @@ with gr.Blocks(title="AI 视频监控", css=CUSTOM_CSS, theme=gr.themes.Soft()) 
                     window.lastAdminLogCount = -1;
                     if (window.updateAdminLogs) window.updateAdminLogs();
                 });
-                return '✅ 日志已清空';
             }
-            """, outputs=[admin_log])
+            """)
 
             # Config events
             apply_config_btn.click(
