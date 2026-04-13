@@ -77,7 +77,7 @@ _vlm_load_lock = threading.Lock()
 
 
 def _load_vlm_model():
-    """延迟加载 Qwen2.5-VL-3B-Instruct，首次检测时才加载。"""
+    """延迟加载 Qwen3-VL-2B-Instruct，首次检测时才加载。"""
     global _vlm_model, _vlm_processor
     with _vlm_load_lock:
         if _vlm_model is not None:
@@ -85,14 +85,14 @@ def _load_vlm_model():
         from transformers import AutoModelForVision2Seq, AutoProcessor
         import torch
 
-        model_name = "Qwen/Qwen2.5-VL-3B-Instruct"
+        model_name = "Qwen/Qwen3-VL-2B-Instruct"
 
         # 优先使用本地缓存
         cache_base = _os.path.expanduser("~/.cache/huggingface/hub")
         cached = False
         if _os.path.isdir(cache_base):
             snapshot_dirs = _glob.glob(
-                _os.path.join(cache_base, "models--Qwen--Qwen2.5-VL-3B-Instruct", "snapshots", "*")
+                _os.path.join(cache_base, "models--Qwen--Qwen3-VL-2B-Instruct", "snapshots", "*")
             )
             if snapshot_dirs:
                 cached = True
