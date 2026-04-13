@@ -202,6 +202,7 @@ _config = {
         "cig": True,
         "no_mask": True,
         "sleep": True,
+        "sleep_skeleton": False,
         "uniform": True,
     },
     "log_cooldown": 5.0,
@@ -811,8 +812,8 @@ def _render_loop():
                                   color=(220, 220, 220), font_size=18,
                                   bg_color=(0, 0, 0))
 
-                # 骨架
-                if kp is not None and len(kp) >= 17:
+                # 骨架（可选）
+                if display.get("sleep_skeleton", False) and kp is not None and len(kp) >= 17:
                     for a, b in SKELETON:
                         if float(kp[a, 2]) > KPT_CONF_THRESHOLD and float(kp[b, 2]) > KPT_CONF_THRESHOLD:
                             pt1 = (int(kp[a, 0]), int(kp[a, 1]))

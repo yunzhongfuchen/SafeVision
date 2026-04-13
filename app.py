@@ -771,6 +771,7 @@ def get_config_values():
         display.get("cig", True),
         display.get("no_mask", True),
         display.get("sleep", True),
+        display.get("sleep_skeleton", False),
         display.get("uniform", True),
     )
 
@@ -779,7 +780,7 @@ def apply_config(conf_fire, conf_cig, conf_mask, conf_pose, conf_uniform,
                  frames_fire, frames_cig, frames_mask, frames_sleep, frames_uniform,
                  log_cooldown,
                  alert_fire, alert_smoke, alert_cig, alert_no_mask, alert_sleep, alert_uniform,
-                 display_fire, display_smoke, display_cig, display_no_mask, display_sleep, display_uniform):
+                 display_fire, display_smoke, display_cig, display_no_mask, display_sleep, display_sleep_skeleton, display_uniform):
     """Apply configuration from admin page"""
     engine.set_config("conf_fire", conf_fire)
     engine.set_config("conf_cig", conf_cig)
@@ -803,6 +804,7 @@ def apply_config(conf_fire, conf_cig, conf_mask, conf_pose, conf_uniform,
     engine.set_display("cig", display_cig)
     engine.set_display("no_mask", display_no_mask)
     engine.set_display("sleep", display_sleep)
+    engine.set_display("sleep_skeleton", display_sleep_skeleton)
     engine.set_display("uniform", display_uniform)
     return "✅ 配置已应用"
 
@@ -880,6 +882,7 @@ with gr.Blocks(title="AI 视频监控", css=CUSTOM_CSS, theme=gr.themes.Soft()) 
                             display_cig = gr.Checkbox(label="抽烟", value=True)
                             display_no_mask = gr.Checkbox(label="未戴口罩", value=True)
                             display_sleep = gr.Checkbox(label="睡岗", value=True)
+                            display_sleep_skeleton = gr.Checkbox(label="睡岗骨架", value=False)
                             display_uniform = gr.Checkbox(label="工服", value=True)
                     apply_config_btn = gr.Button("✅ 应用配置", variant="primary")
                     config_status = gr.Textbox(label="", interactive=False, visible=False)
@@ -940,7 +943,7 @@ with gr.Blocks(title="AI 视频监控", css=CUSTOM_CSS, theme=gr.themes.Soft()) 
                         frames_fire, frames_cig, frames_mask, frames_sleep, frames_uniform,
                         log_cooldown,
                         alert_fire, alert_smoke, alert_cig, alert_no_mask, alert_sleep, alert_uniform,
-                        display_fire, display_smoke, display_cig, display_no_mask, display_sleep, display_uniform],
+                        display_fire, display_smoke, display_cig, display_no_mask, display_sleep, display_sleep_skeleton, display_uniform],
                 outputs=[config_status],
             )
             export_btn.click(export_logs, outputs=[export_status])
