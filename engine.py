@@ -78,6 +78,7 @@ _vlm_load_lock = threading.Lock()
 
 def _load_vlm_model():
     """测试 Ollama 连接并确认模型可用。"""
+    import urllib.request
     global _vlm_model_loaded
     with _vlm_load_lock:
         if _vlm_model_loaded:
@@ -705,7 +706,6 @@ VLM_PROMPT = """分析这张监控画面中的安全隐患。以JSON格式返回
 
 def detect_vlm():
     """VLM 辅助检测：每 30 秒分析一帧，独立判断安全隐患。"""
-    global _vlm_model
     try:
         _load_vlm_model()
     except Exception as e:
@@ -738,6 +738,7 @@ def detect_vlm():
                 snap_b64 = "data:image/jpeg;base64," + img_b64
 
                 # 调用 Ollama API
+                import urllib.request
                 payload = json.dumps({
                     "model": VLM_MODEL_NAME,
                     "messages": [
