@@ -589,7 +589,6 @@ def update_system_status():
 
     threads = status.get("threads", {})
     thread_names = {
-        "detect_human": "人体检测",
         "detect_cig": "抽烟检测",
         "detect_mask": "口罩检测",
         "detect_fire": "火焰烟雾",
@@ -1132,7 +1131,7 @@ function() {
             var runColor = s.running ? '#16a34a' : '#6b7280';
             var threads = s.threads || {};
             var threadNames = {
-                'detect_human': '人体检测', 'detect_cig': '抽烟检测',
+                'detect_cig': '抽烟检测',
                 'detect_mask': '口罩检测', 'detect_fire': '火焰烟雾',
                 'detect_sleep': '睡岗检测', 'detect_uniform': '工服检测',
                 '_render_loop': '渲染输出'
